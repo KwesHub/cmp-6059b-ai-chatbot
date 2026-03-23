@@ -1,0 +1,21 @@
+# NLP
+spacy==3.7.4
+
+# Expert system / reasoning engine
+experta==1.9.4
+
+# Machine learning
+scikit-learn==1.4.2
+tensorflow==2.16.1
+keras==3.3.3
+
+# Data processing
+pandas==2.2.2
+numpy==1.26.4
+
+# UI
+streamlit==1.35.0
+
+# Utilities
+requests==2.32.3
+joblib==1.4.2
