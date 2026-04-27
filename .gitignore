@@ -23,4 +23,5 @@ venv/
 .ipynb_checkpoints/
 
 # Generated database file — created locally by running database.py
-chatbot.db.env
+chatbot.db
+.env
