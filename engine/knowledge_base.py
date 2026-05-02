@@ -2,6 +2,12 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 import json
 import os
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from database import get_connection
 
 
 class KnowledgeBase:
@@ -12,7 +18,7 @@ class KnowledgeBase:
         self.fallback_responses: List[str] = []
         self.last_updated = datetime.now()
 
-        # Load initial KB
+        # Load initial KB from DB
         self._init_qa_database()
         self._init_rules()
         self._init_fallback_responses()
@@ -20,235 +26,281 @@ class KnowledgeBase:
     ################ Q&A DATABASE INTILISATION
 
     def _init_qa_database(self):
-        """Initilise Q&A pairs organised by topic."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT category, question, keywords, answer FROM kb_qa")
+        rows = cursor.fetchall()
+        conn.close()
 
-        ### TASK 1: TICKET BOOKING
+        if not rows:
+            self._seed_qa_into_db()
+            self._init_qa_database()  # load again
+            return
 
-        self.qa_database["ticket_types"] = [
-            {
-                "question": "What ticket types do you offer?",
-                "keywords": ["ticket types", "what tickets", "which tickets"],
-                "answer": (
-                    "We offer several ticket types:\n"
-                    "• Single tickets — one journey, any date/time\n"
-                    "• Return tickets — outbound + return, up to 30 days\n"
-                    "• Advance tickets — cheapest, must book ahead, limited changes\n"
-                    "• Off-peak tickets — cheaper fares during quiet times\n\n"
-                    "Which type interests you?"
-                ),
-            },
-            {
-                "question": "What is a single ticket?",
-                "keywords": ["single ticket", "single fare", "one way"],
-                "answer": (
-                    "A single ticket covers one outbound journey only. "
-                    "You can travel any date/time within the validity period. "
-                    "Usually valid for 7 days after issue. Good for one-off trips."
-                ),
-            },
-            {
-                "question": "What is a return ticket?",
-                "keywords": ["return ticket", "return fare", "round trip"],
-                "answer": (
-                    "A return ticket includes your outbound journey and a return journey "
-                    "within up to 30 days. Return journeys must be on a specified date or "
-                    "within a date range. Often cheaper than two singles combined."
-                ),
-            },
-            {
-                "question": "What is an advance ticket?",
-                "keywords": ["advance ticket", "advance booking", "book ahead"],
-                "answer": (
-                    "Advance tickets are discounted fares available for trains departing "
-                    "at specific times. Must be purchased several days in advance. "
-                    "Changes/cancellations may incur fees. Great savings for flexible travellers."
-                ),
-            },
-            {
-                "question": "What are off-peak tickets?",
-                "keywords": ["off-peak", "quiet time", "shoulder", "cheap fares"],
-                "answer": (
-                    "Off-peak tickets are cheaper and valid during quieter travel times, "
-                    "typically mid-morning to afternoon on weekdays, and off-peak hours weekends. "
-                    "Exact times vary by route. Best for time-flexible travellers."
-                ),
-            },
-        ]
+        for category, question, keywords_json, answer in rows:
+            if category not in self.qa_database:
+                self.qa_database[category] = []
+            keywords = json.loads(keywords_json) if keywords_json else []
+            self.qa_database[category].append({
+                "question": question,
+                "keywords": keywords,
+                "answer": answer
+            })
 
-        self.qa_database["booking_policies"] = [
-            {
-                "question": "When can I book a ticket?",
-                "keywords": ["book tickets", "when book", "booking time"],
-                "answer": (
-                    "Tickets typically open for booking 12 weeks (84 days) in advance. "
-                    "Advance and off-peak fares sell out quickly. "
-                    "You can book online 24/7, up to departure time for some fares."
-                ),
-            },
-            {
-                "question": "Can I change my ticket?",
-                "keywords": ["change ticket", "modify booking", "alter ticket"],
-                "answer": (
-                    "Changes are subject to your ticket type:\n"
-                    "• Single/Return — often changeable with a fee (£10-20)\n"
-                    "• Advance — limited changes, £20-30 fee, subject to availability\n"
-                    "• Off-peak — may be changeable depending on specific restrictions\n\n"
-                    "Check your ticket terms or contact us for details."
-                ),
-            },
-            {
-                "question": "What is the booking deadline?",
-                "keywords": ["book before", "deadline", "last booking time"],
-                "answer": (
-                    "Most tickets can be purchased up to departure time online. "
-                    "Station ticket offices close 1 hour before last train. "
-                    "For travel on the same day, purchase at the station or before midnight online."
-                ),
-            },
-        ]
+    def _seed_qa_into_db(self):
+        seed = self._get_seed_qa()
+        conn = get_connection()
+        cursor = conn.cursor()
+        for category, qa_list in seed.items():
+            for qa in qa_list:
+                cursor.execute("INSERT INTO kb_qa (category, question, keywords, answer) VALUES (?, ?, ?, ?)", (category, qa["question"], json.dumps(qa["keywords"]), qa["answer"]))
+        conn.commit()
+        conn.close()
 
-        self.qa_database["cancellation_policies"] = [
-            {
-                "question": "Can I cancel my ticket?",
-                "keywords": ["cancel ticket", "cancellation", "refund ticket"],
-                "answer": (
-                    "Cancellation depends on ticket type:\n"
-                    "• Advance — Non-refundable, exchange only for £10-30 fee\n"
-                    "• Off-peak — Non-refundable, exchange for £15 fee\n"
-                    "• Single/Return — Often refundable up to departure minus £5 fee\n\n"
-                    "Check your ticket terms. Services disrupted due to delay may offer refunds."
-                ),
-            },
-            {
-                "question": "How do I get a refund?",
-                "keywords": ["refund", "money back", "compensation"],
-                "answer": (
-                    "You can claim refunds through our online portal or by post:\n"
-                    "1. Visit our website and enter your ticket reference\n"
-                    "2. Select 'Claim Refund' and submit cancellation reason\n"
-                    "3. Allow 10-14 business days for processing\n\n"
-                    "Delays of 15+ mins may also qualify for Delay Repay compensation."
-                ),
-            },
-            {
-                "question": "What is your refund timeline?",
-                "keywords": ["refund time", "how long refund", "processing time"],
-                "answer": (
-                    "Refunds typically take 10-14 business days after approval. "
-                    "Check your bank or PayPal account. "
-                    "Contact support if not received after 14 days."
-                ),
-            },
-        ]
-
-        ### TASK 2: DELAYS & SERVICE INFO
-
-        self.qa_database["delay_compensation"] = [
-            {
-                "question": "What is Delay Repay?",
-                "keywords": ["delay repay", "compensation", "late train"],
-                "answer": (
-                    "Delay Repay is our automatic compensation scheme:\n"
-                    "• 15-29 minutes late → 25% of ticket price refund\n"
-                    "• 30-59 minutes late → 50% of ticket price refund\n"
-                    "• 60+ minutes late → 100% of ticket price refund\n\n"
-                    "File claims online within 28 days of travel."
-                ),
-            },
-            {
-                "question": "How do I claim delay compensation?",
-                "keywords": ["claim delay", "compensation process", "delay claim"],
-                "answer": (
-                    "1. Visit www.swrailway.com/delays\n"
-                    "2. Enter your ticket reference & journey date\n"
-                    "3. Select compensation amount offered\n"
-                    "4. Confirm payment method\n"
-                    "5. Receive refund in 5-7 working days\n\n"
-                    "Keep your ticket for proof. Claims accepted up to 28 days after travel."
-                ),
-            },
-            {
-                "question": "What delays qualify for compensation?",
-                "keywords": ["delay claim", "which delays", "qualify for"],
-                "answer": (
-                    "Compensation is payable if:\n"
-                    "• Train arrived 15+ minutes late at destination\n"
-                    "• You hold a valid ticket for that journey\n"
-                    "• Delay wasn't caused by: extreme weather, security threat, "
-                    "passenger incidents, industrial action, or vandalism\n\n"
-                    "Strikes and severe weather are exceptions."
-                ),
-            },
-        ]
-
-        self.qa_database["service_info"] = [
-            {
-                "question": "What routes do you operate?",
-                "keywords": ["routes", "where do you go", "services"],
-                "answer": (
-                    "South Western Railway (SWR) operates trains across:\n"
-                    "• South West — Weymouth, Dorchester, Bournemouth\n"
-                    "• South Central — Southampton, Winchester\n"
-                    "• London connections — Waterloo, Victoria, Clapham Junction\n\n"
-                    "Check swrailway.com for full route map and timetables."
-                ),
-            },
-            {
-                "question": "How do I report a problem with my journey?",
-                "keywords": ["report issue", "complaint", "problem"],
-                "answer": (
-                    "Report issues through:\n"
-                    "• Online: www.swrailway.com/contact\n"
-                    "• Phone: 0345 600 0650 (Mon-Fri 08:00-18:00)\n"
-                    "• In person: Station ticket office\n"
-                    "• Email: customer.services@swrailway.com\n\n"
-                    "Provide ticket reference, date, time, and journey details."
-                ),
-            },
-            {
-                "question": "What on-board facilities do you offer?",
-                "keywords": ["facilities", "wifi", "toilet", "food", "onboard"],
-                "answer": (
-                    "Most trains include:\n"
-                    "• Standard & First Class seating\n"
-                    "• Toilets & baby change facilities\n"
-                    "• Food & beverage service\n"
-                    "• Power sockets in First Class\n"
-                    "• Bicycle racks (subject to space)\n\n"
-                    "WiFi available on selected routes."
-                ),
-            },
-        ]
-
-        self.qa_database["toc_contact"] = [
-            {
-                "question": "How do I contact SWR?",
-                "keywords": ["contact", "phone number", "email", "reach us"],
-                "answer": (
-                    "South Western Railway contact details:\n"
-                    "Phone: 0345 600 0650 (Mon-Fri 08:00-18:00)\n"
-                    "Email: customer.services@swrailway.com\n"
-                    "Website: www.swrailway.com\n"
-                    "Twitter: @SouthWesternRly\n\n"
-                    "Report accessibility issues or need assistance? Call ahead."
-                ),
-            },
-            {
-                "question": "What are your customer service hours?",
-                "keywords": ["customer service", "hours", "open", "support"],
-                "answer": (
-                    "Customer Services:\n"
-                    "• Monday-Friday: 08:00-18:00 (phone)\n"
-                    "• Saturday: 09:00-17:00\n"
-                    "• Sunday: 10:00-16:00\n\n"
-                    "Online services (website, mobile app) available 24/7."
-                ),
-            },
-        ]
+    def _get_seed_qa(self):
+        return {
+            "ticket_types": [
+                {
+                    "question": "What ticket types do you offer?",
+                    "keywords": ["ticket types", "what tickets", "which tickets"],
+                    "answer": (
+                        "We offer several ticket types:\n"
+                        "- Single tickets - one journey, any date/time\n"
+                        "- Return tickets - outbound + return, up to 30 days\n"
+                        "- Advance tickets - cheapest, must book ahead, limited changes\n"
+                        "- Off-peak tickets - cheaper fares during quiet times\n\n"
+                        "Which type interests you?"
+                    ),
+                },
+                {
+                    "question": "What is a single ticket?",
+                    "keywords": ["single ticket", "single fare", "one way"],
+                    "answer": (
+                        "A single ticket covers one outbound journey only. "
+                        "You can travel any date/time within the validity period. "
+                        "Usually valid for 7 days after issue. Good for one-off trips."
+                    ),
+                },
+                {
+                    "question": "What is a return ticket?",
+                    "keywords": ["return ticket", "return fare", "round trip"],
+                    "answer": (
+                        "A return ticket includes your outbound journey and a return journey "
+                        "within up to 30 days. Return journeys must be on a specified date or "
+                        "within a date range. Often cheaper than two singles combined."
+                    ),
+                },
+                {
+                    "question": "What is an advance ticket?",
+                    "keywords": ["advance ticket", "advance booking", "book ahead"],
+                    "answer": (
+                        "Advance tickets are discounted fares available for trains departing "
+                        "at specific times. Must be purchased several days in advance. "
+                        "Changes/cancellations may incur fees. Great savings for flexible travellers."
+                    ),
+                },
+                {
+                    "question": "What are off-peak tickets?",
+                    "keywords": ["off-peak", "quiet time", "shoulder", "cheap fares"],
+                    "answer": (
+                        "Off-peak tickets are cheaper and valid during quieter travel times, "
+                        "typically mid-morning to afternoon on weekdays, and off-peak hours weekends. "
+                        "Exact times vary by route. Best for time-flexible travellers."
+                    ),
+                },
+            ],
+            "booking_policies": [
+                {
+                    "question": "When can I book a ticket?",
+                    "keywords": ["book tickets", "when book", "booking time"],
+                    "answer": (
+                        "Tickets typically open for booking 12 weeks (84 days) in advance. "
+                        "Advance and off-peak fares sell out quickly. "
+                        "You can book online 24/7, up to departure time for some fares."
+                    ),
+                },
+                {
+                    "question": "Can I change my ticket?",
+                    "keywords": ["change ticket", "modify booking", "alter ticket"],
+                    "answer": (
+                        "Changes are subject to your ticket type:\n"
+                        "- Single/Return - often changeable with a fee (£10-20)\n"
+                        "- Advance - limited changes, £20-30 fee, subject to availability\n"
+                        "- Off-peak - may be changeable depending on specific restrictions\n\n"
+                        "Check your ticket terms or contact us for details."
+                    ),
+                },
+                {
+                    "question": "What is the booking deadline?",
+                    "keywords": ["book before", "deadline", "last booking time"],
+                    "answer": (
+                        "Most tickets can be purchased up to departure time online. "
+                        "Station ticket offices close 1 hour before last train. "
+                        "For travel on the same day, purchase at the station or before midnight online."
+                    ),
+                },
+            ],
+            "cancellation_policies": [
+                {
+                    "question": "Can I cancel my ticket?",
+                    "keywords": ["cancel ticket", "cancellation", "refund ticket"],
+                    "answer": (
+                        "Cancellation depends on ticket type:\n"
+                        "- Advance - Non-refundable, exchange only for £10-30 fee\n"
+                        "- Off-peak - Non-refundable, exchange for £15 fee\n"
+                        "- Single/Return - Often refundable up to departure minus £5 fee\n\n"
+                        "Check your ticket terms. Services disrupted due to delay may offer refunds."
+                    ),
+                },
+                {
+                    "question": "How do I get a refund?",
+                    "keywords": ["refund", "money back", "compensation"],
+                    "answer": (
+                        "You can claim refunds through our online portal or by post:\n"
+                        "1. Visit our website and enter your ticket reference\n"
+                        "2. Select 'Claim Refund' and submit cancellation reason\n"
+                        "3. Allow 10-14 business days for processing\n\n"
+                        "Delays of 15+ mins may also qualify for Delay Repay compensation."
+                    ),
+                },
+                {
+                    "question": "What is your refund timeline?",
+                    "keywords": ["refund time", "how long refund", "processing time"],
+                    "answer": (
+                        "Refunds typically take 10-14 business days after approval. "
+                        "Check your bank or PayPal account. "
+                        "Contact support if not received after 14 days."
+                    ),
+                },
+            ],
+            "delay_compensation": [
+                {
+                    "question": "What is Delay Repay?",
+                    "keywords": ["delay repay", "compensation", "late train"],
+                    "answer": (
+                        "Delay Repay is our automatic compensation scheme:\n"
+                        "- 15-29 minutes late -> 25% of ticket price refund\n"
+                        "- 30-59 minutes late -> 50% of ticket price refund\n"
+                        "- 60+ minutes late -> 100% of ticket price refund\n\n"
+                        "File claims online within 28 days of travel."
+                    ),
+                },
+                {
+                    "question": "How do I claim delay compensation?",
+                    "keywords": ["claim delay", "compensation process", "delay claim"],
+                    "answer": (
+                        "1. Visit www.swrailway.com/delays\n"
+                        "2. Enter your ticket reference & journey date\n"
+                        "3. Select compensation amount offered\n"
+                        "4. Confirm payment method\n"
+                        "5. Receive refund in 5-7 working days\n\n"
+                        "Keep your ticket for proof. Claims accepted up to 28 days after travel."
+                    ),
+                },
+                {
+                    "question": "What delays qualify for compensation?",
+                    "keywords": ["delay claim", "which delays", "qualify for"],
+                    "answer": (
+                        "Compensation is payable if:\n"
+                        "- Train arrived 15+ minutes late at destination\n"
+                        "- You hold a valid ticket for that journey\n"
+                        "- Delay wasn't caused by: extreme weather, security threat, "
+                        "passenger incidents, industrial action, or vandalism\n\n"
+                        "Strikes and severe weather are exceptions."
+                    ),
+                },
+            ],
+            "service_info": [
+                {
+                    "question": "What routes do you operate?",
+                    "keywords": ["routes", "where do you go", "services"],
+                    "answer": (
+                        "South Western Railway (SWR) operates trains across:\n"
+                        "- South West - Weymouth, Dorchester, Bournemouth\n"
+                        "- South Central - Southampton, Winchester\n"
+                        "- London connections - Waterloo, Victoria, Clapham Junction\n\n"
+                        "Check swrailway.com for full route map and timetables."
+                    ),
+                },
+                {
+                    "question": "How do I report a problem with my journey?",
+                    "keywords": ["report issue", "complaint", "problem"],
+                    "answer": (
+                        "Report issues through:\n"
+                        "- Online: www.swrailway.com/contact\n"
+                        "- Phone: 0345 600 0650 (Mon-Fri 08:00-18:00)\n"
+                        "- In person: Station ticket office\n"
+                        "- Email: customer.services@swrailway.com\n\n"
+                        "Provide ticket reference, date, time, and journey details."
+                    ),
+                },
+                {
+                    "question": "What on-board facilities do you offer?",
+                    "keywords": ["facilities", "wifi", "toilet", "food", "onboard"],
+                    "answer": (
+                        "Most trains include:\n"
+                        "- Standard & First Class seating\n"
+                        "- Toilets & baby change facilities\n"
+                        "- Food & beverage service\n"
+                        "- Power sockets in First Class\n"
+                        "- Bicycle racks (subject to space)\n\n"
+                        "WiFi available on selected routes."
+                    ),
+                },
+            ],
+            "toc_contact": [
+                {
+                    "question": "How do I contact SWR?",
+                    "keywords": ["contact", "phone number", "email", "reach us"],
+                    "answer": (
+                        "South Western Railway contact details:\n"
+                        "Phone: 0345 600 0650 (Mon-Fri 08:00-18:00)\n"
+                        "Email: customer.services@swrailway.com\n"
+                        "Website: www.swrailway.com\n"
+                        "Twitter: @SouthWesternRly\n\n"
+                        "Report accessibility issues or need assistance? Call ahead."
+                    ),
+                },
+                {
+                    "question": "What are your customer service hours?",
+                    "keywords": ["customer service", "hours", "open", "support"],
+                    "answer": (
+                        "Customer Services:\n"
+                        "- Monday-Friday: 08:00-18:00 (phone)\n"
+                        "- Saturday: 09:00-17:00\n"
+                        "- Sunday: 10:00-16:00\n\n"
+                        "Online services (website, mobile app) available 24/7."
+                    ),
+                },
+            ],
+        }
 
     def _init_rules(self):
-        """Initilise business rules."""
-        self.rules = {
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT rule_name, rule_data FROM kb_rules")
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            self._seed_rules_into_db()
+            self._init_rules()
+            return
+
+        for rule_name, rule_data_json in rows:
+            self.rules[rule_name] = json.loads(rule_data_json)
+
+    def _seed_rules_into_db(self):
+        seed = self._get_seed_rules()
+        conn = get_connection()
+        cursor = conn.cursor()
+        for rule_name, rule_data in seed.items():
+            cursor.execute("INSERT INTO kb_rules (rule_name, rule_data) VALUES (?, ?)", (rule_name, json.dumps(rule_data)))
+        conn.commit()
+        conn.close()
+
+    def _get_seed_rules(self):
+        return {
             "refund_eligibility": {
                 "advance_ticket": {
                     "refundable": False,
@@ -296,8 +348,30 @@ class KnowledgeBase:
         }
 
     def _init_fallback_responses(self):
-        """Initilise fallback responses for unrecognised queries."""
-        self.fallback_responses = [
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT response FROM kb_fallbacks ORDER BY id")
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            self._seed_fallbacks_into_db()
+            self._init_fallback_responses()
+            return
+
+        self.fallback_responses = [row[0] for row in rows]
+
+    def _seed_fallbacks_into_db(self):
+        seed = self._get_seed_fallbacks()
+        conn = get_connection()
+        cursor = conn.cursor()
+        for response in seed:
+            cursor.execute("INSERT INTO kb_fallbacks (response) VALUES (?)", (response,))
+        conn.commit()
+        conn.close()
+
+    def _get_seed_fallbacks(self):
+        return [
             (
                 "I'm not sure I understand that. I can help with:\n"
                 "• Finding cheap train tickets (single, return, advance, off-peak)\n"
@@ -406,6 +480,12 @@ class KnowledgeBase:
                 "answer": answer,
             }
         )
+        # Insert into DB
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO kb_qa (category, question, keywords, answer) VALUES (?, ?, ?, ?)", (category, question, json.dumps(keywords), answer))
+        conn.commit()
+        conn.close()
         self.last_updated = datetime.now()
         return True
 
@@ -427,6 +507,12 @@ class KnowledgeBase:
         for qa in self.qa_database[category]:
             if qa["question"].lower() == question.lower():
                 qa["answer"] = new_answer
+                # Update DB
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("UPDATE kb_qa SET answer = ? WHERE category = ? AND question = ?", (new_answer, category, question))
+                conn.commit()
+                conn.close()
                 self.last_updated = datetime.now()
                 return True
 
@@ -468,6 +554,12 @@ class KnowledgeBase:
         ]
 
         if len(self.qa_database[category]) < original_len:
+            # Delete from DB
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM kb_qa WHERE category = ? AND question = ?", (category, question))
+            conn.commit()
+            conn.close()
             self.last_updated = datetime.now()
             return True
 

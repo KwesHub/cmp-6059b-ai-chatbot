@@ -61,6 +61,34 @@ def initialise_database():
         )
     """)
 
+    # ─── Knowledge Base Q&A ─────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kb_qa (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            category    TEXT NOT NULL,
+            question    TEXT NOT NULL,
+            keywords    TEXT,  -- JSON list
+            answer      TEXT NOT NULL
+        )
+    """)
+
+    # ─── Knowledge Base Rules ───────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kb_rules (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_name   TEXT NOT NULL UNIQUE,
+            rule_data   TEXT NOT NULL  -- JSON
+        )
+    """)
+
+    # ─── Knowledge Base Fallbacks ───────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kb_fallbacks (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            response    TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()
     print("Database initialised successfully.")
