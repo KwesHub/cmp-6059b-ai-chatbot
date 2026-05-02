@@ -13,6 +13,7 @@ from config import (
 )
 from task1.ticket_api import find_cheapest_ticket
 from task2.predict import predict_delay
+from engine.knowledge_base import get_kb
 
 
 # ─── Rules for book_ticket intent ────────────────────────
@@ -154,6 +155,18 @@ class TrainBotRules(KnowledgeEngine):
             f"Estimated arrival: {arrival}\n"
             f"Confidence: {confidence}"
         )
+
+    # ─── Knowledge Base Query (for general questions) ──────
+    @Rule(Fact(query=MATCH.question))
+    def kb_query(self, question):
+        """Search KB for answers to general questions."""
+        kb = get_kb()
+        match = kb.search_qa(question, threshold=0.6)
+
+        if match:
+            self.response = match["answer"]
+        else:
+            self.response = kb.get_fallback_response(0)
 
     # ─── Unknown intent fallback ──────────────────────────
     @Rule(Fact(intent=INTENT_UNKNOWN))
