@@ -115,7 +115,7 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 </soapenv:Envelope>"""
 
 
-def _ojp_url(origin_crs, destination_crs, iso_datetime):
+def _ojp_url(origin_crs, destination_crs, iso_datetime, ticket_type="single"):
     """
     Build a pre-filled National Rail journey planner URL.
     Date format: DDMMYY (e.g. 8 May 2026 → 080526)
@@ -130,12 +130,13 @@ def _ojp_url(origin_crs, destination_crs, iso_datetime):
         leaving_date = "010126"
         leaving_hour = "09"
         leaving_min  = "00"
+    type_code = "R" if ticket_type == "return" else "S"
     return (
         f"https://www.nationalrail.co.uk/journey-planner/"
         f"?origin={origin_crs}&destination={destination_crs}"
         f"&leavingType=departing&leavingDate={leaving_date}"
         f"&leavingHour={leaving_hour}&leavingMin={leaving_min}"
-        f"&adults=1&children=0&railcards=&class=S&type=S"
+        f"&adults=1&children=0&railcards=&class=S&type={type_code}"
     )
 
 

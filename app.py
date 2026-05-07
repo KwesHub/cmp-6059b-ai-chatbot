@@ -47,7 +47,7 @@ if "collected" not in st.session_state:
     st.session_state.collected = {
         "origin": None, "destination": None,
         "origin_crs": None, "destination_crs": None,
-        "date": None, "ticket_type": None,
+        "date": None, "depart_time": None, "ticket_type": None,
         "current_station": None, "current_station_crs": None,
         "planned_arrival": None,
         "day_of_week": None, "month": None,
@@ -182,6 +182,7 @@ def process_message(user_input: str) -> str:
             "ask_destination": INTENT_BOOK_TICKET,
             "ask_date": INTENT_BOOK_TICKET,
             "confirm_date": INTENT_BOOK_TICKET,
+            "ask_time": INTENT_BOOK_TICKET,
             "ask_ticket_type": INTENT_BOOK_TICKET,
             "disambiguate_station": None,  # handled by disambig_for context
             "confirm_typo": None,          # protected — user is answering yes/no
@@ -365,6 +366,31 @@ def process_message(user_input: str) -> str:
         st.session_state._confirm_prefix = f"✅ Ticket type: **{c['ticket_type']}**."
         st.session_state.stage = None
 
+    elif stage == "ask_time":
+        import re as _re
+        raw_time = user_input.strip().lower()
+        # "any", "skip", "no preference", blank → no time filter (default 09:00)
+        if raw_time in ("any", "skip", "no", "none", "no preference", "doesn't matter", ""):
+            c["depart_time"] = "09:00"
+            st.session_state._confirm_prefix = "✅ Searching all day for the cheapest fare."
+        else:
+            # Try to extract HH:MM from input (e.g. "9pm", "14:30", "9 am")
+            match = _re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', raw_time)
+            if match:
+                hour = int(match.group(1))
+                minute = int(match.group(2) or 0)
+                meridiem = match.group(3)
+                if meridiem == "pm" and hour != 12:
+                    hour += 12
+                elif meridiem == "am" and hour == 12:
+                    hour = 0
+                c["depart_time"] = f"{hour:02d}:{minute:02d}"
+                st.session_state._confirm_prefix = f"✅ Departure time: **{c['depart_time']}**."
+            else:
+                c["depart_time"] = "09:00"
+                st.session_state._confirm_prefix = "✅ Couldn't parse that time — defaulting to 09:00."
+        st.session_state.stage = None
+
     elif stage == "ask_current_station":
         name, crs = resolve_station(user_input, intent)
         if name == "__ambiguous__":
@@ -482,16 +508,23 @@ def process_message(user_input: str) -> str:
         if not c["ticket_type"]:
             st.session_state.stage = "ask_ticket_type"
             return _reply("Would you like a single or return ticket?")
+        if c["depart_time"] is None:
+            st.session_state.stage = "ask_time"
+            return _reply("What time would you like to depart? "
+                          "For example: 9am, 14:30. "
+                          "Or type **any** to find the cheapest fare of the day.")
 
         # All info collected — search for ticket
-        # c["date"] is now an ISO string e.g. "2026-07-15T09:00:00"
-        # Pass it directly so format_datetime doesn't re-parse and drift
         from task1.ticket_api import find_cheapest_ticket, format_datetime, _ojp_url
-        travel_iso = c["date"] if "T" in str(c["date"]) else format_datetime(c["date"])
+        # Merge confirmed date with chosen departure time
+        base_iso = c["date"] if "T" in str(c["date"]) else format_datetime(c["date"])
+        depart_hhmm = c.get("depart_time") or "09:00"
+        travel_iso = base_iso[:10] + "T" + depart_hhmm + ":00"
         result = find_cheapest_ticket(
             origin_crs=c["origin_crs"] or "NRW",
             destination_crs=c["destination_crs"] or "LST",
-            date_string=travel_iso
+            date_string=travel_iso,
+            return_date=travel_iso if c.get("ticket_type") == "return" else None
         )
         # Reset for next conversation
         st.session_state.intent = None

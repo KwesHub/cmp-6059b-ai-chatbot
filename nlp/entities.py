@@ -40,6 +40,8 @@ def find_stations_in_text(user_input: str) -> list:
     text_lower = user_input.lower()
 
     for station_name, crs_code in all_stations:
+        if not _is_likely_rail_station(station_name):
+            continue
         station_lower = station_name.lower()
         if station_lower in text_lower:
             # Full station name found in text (e.g. "Southampton Central" in text)
@@ -54,9 +56,23 @@ def find_stations_in_text(user_input: str) -> list:
     return [(name, code) for _, name, code in found]
 
 
+# Keywords that indicate non-rail stops (trams, buses, arenas, etc.)
+_NON_RAIL_KEYWORDS = (
+    "(bus)", "arena", "docks", "ferry", "(tramlink)",
+    "tram", "metro", "underground", "tube"
+)
+
+
+def _is_likely_rail_station(name: str) -> bool:
+    """Return True if the station name looks like an actual National Rail stop."""
+    nl = name.lower()
+    return not any(kw in nl for kw in _NON_RAIL_KEYWORDS)
+
+
 def find_stations_fuzzy(query: str, limit: int = 3) -> list:
     """
-    Return up to `limit` station matches for an ambiguous query.
+    Return up to `limit` National Rail station matches for an ambiguous query.
+    Filters out bus stops, arenas, tram stops etc.
     Priority:
       1. Starts-with match (e.g. "London" → "London Liverpool Street" first)
       2. Contains match   (e.g. "Street" → "London Liverpool Street")
@@ -72,6 +88,8 @@ def find_stations_fuzzy(query: str, limit: int = 3) -> list:
     starts = []
     contains = []
     for name, crs in all_stations:
+        if not _is_likely_rail_station(name):
+            continue
         nl = name.lower()
         if nl.startswith(q):
             starts.append((name, crs))
