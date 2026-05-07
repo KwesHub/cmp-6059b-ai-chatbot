@@ -123,12 +123,18 @@ def process_message(user_input: str) -> str:
     #    answer to the question we just asked ─────────────
     if stage == "ask_origin":
         name, crs = resolve_station(user_input, intent)
+        if not crs:
+            return (f"Sorry, I couldn't find a station called '{name}'. "
+                    "Please try again — for example: Norwich, Southampton, Oxford.")
         c["origin"] = name
         c["origin_crs"] = crs
         st.session_state.stage = None
 
     elif stage == "ask_destination":
         name, crs = resolve_station(user_input, intent)
+        if not crs:
+            return (f"Sorry, I couldn't find a station called '{name}'. "
+                    "Please try again — for example: London, Oxford, Winchester.")
         c["destination"] = name
         c["destination_crs"] = crs
         st.session_state.stage = None
@@ -145,12 +151,18 @@ def process_message(user_input: str) -> str:
 
     elif stage == "ask_current_station":
         name, crs = resolve_station(user_input, intent)
+        if not crs:
+            return (f"Sorry, I couldn't find '{name}' on the Weymouth–Waterloo line. "
+                    "Try: Weymouth, Wareham, Poole, Bournemouth, Southampton, Winchester.")
         c["current_station"] = name
         c["current_station_crs"] = crs
         st.session_state.stage = None
 
     elif stage == "ask_delay_destination":
         name, crs = resolve_station(user_input, intent)
+        if not crs:
+            return (f"Sorry, I couldn't find '{name}'. "
+                    "Try: London Waterloo, Winchester, Southampton.")
         c["destination"] = name
         c["destination_crs"] = crs
         st.session_state.stage = None
