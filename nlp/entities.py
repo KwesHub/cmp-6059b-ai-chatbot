@@ -25,10 +25,12 @@ def get_crs_code(station_name: str) -> str | None:
 
 def find_stations_in_text(user_input: str) -> list:
     """
-    Fallback: scan the sentence against the station_codes table.
-    Catches stations spaCy misses.
-    Returns list of (station_name, crs_code) tuples in order
-    of appearance in the sentence.
+    Scan user input against station_codes table.
+    Priority:
+      1. Exact match (case-insensitive) — e.g. "Norwich" → only Norwich (NRW)
+      2. Station name contained in text — e.g. full sentence with station name
+      3. Text contained in station name — e.g. "Southampton" → Southampton Central
+    Returns list of (station_name, crs_code).
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -36,24 +38,41 @@ def find_stations_in_text(user_input: str) -> list:
     all_stations = cursor.fetchall()
     conn.close()
 
-    found = []
-    text_lower = user_input.lower()
+    text_lower = user_input.strip().lower()
 
+    # Pass 1: exact match
+    for station_name, crs_code in all_stations:
+        if not _is_likely_rail_station(station_name):
+            continue
+        if station_name.lower() == text_lower:
+            return [(station_name, crs_code)]
+
+    # Pass 2: station name is a substring of the user's text (sentence input)
+    found = []
     for station_name, crs_code in all_stations:
         if not _is_likely_rail_station(station_name):
             continue
         station_lower = station_name.lower()
-        if station_lower in text_lower:
-            # Full station name found in text (e.g. "Southampton Central" in text)
+        if station_lower in text_lower and station_lower != text_lower:
             pos = text_lower.index(station_lower)
             found.append((pos, station_name, crs_code))
-        elif len(text_lower) >= 4 and text_lower in station_lower:
-            # User typed a prefix/substring of the station name
-            # e.g. "southampton" matches "Southampton Central"
-            found.append((0, station_name, crs_code))
 
-    found.sort(key=lambda x: x[0])
-    return [(name, code) for _, name, code in found]
+    if found:
+        found.sort(key=lambda x: x[0])
+        return [(name, code) for _, name, code in found]
+
+    # Pass 3: user's text is a prefix/substring of a station name
+    # e.g. "Southampton" → "Southampton Central"
+    if len(text_lower) >= 4:
+        partial = []
+        for station_name, crs_code in all_stations:
+            if not _is_likely_rail_station(station_name):
+                continue
+            if text_lower in station_name.lower() and station_name.lower() != text_lower:
+                partial.append((station_name, crs_code))
+        return partial
+
+    return []
 
 
 # Keywords that indicate non-rail stops (trams, buses, arenas, etc.)
@@ -85,6 +104,12 @@ def find_stations_fuzzy(query: str, limit: int = 3) -> list:
     conn.close()
 
     q = query.lower().strip()
+
+    # Check exact match first
+    for name, crs in all_stations:
+        if name.lower() == q and _is_likely_rail_station(name):
+            return [(name, crs)]
+
     starts = []
     contains = []
     for name, crs in all_stations:
@@ -94,7 +119,11 @@ def find_stations_fuzzy(query: str, limit: int = 3) -> list:
         if nl.startswith(q):
             starts.append((name, crs))
         elif q in nl:
-            contains.append((name, crs))
+            # Only include if query appears as a word boundary, not mid-word
+            # e.g. "london" matches "London Liverpool Street" but not "Caldon Low"
+            import re as _re
+            if _re.search(r'\b' + _re.escape(q), nl):
+                contains.append((name, crs))
 
     results = starts + contains
     return results[:limit]

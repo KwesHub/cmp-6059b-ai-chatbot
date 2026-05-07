@@ -117,23 +117,22 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 
 def _ojp_url(origin_crs, destination_crs, iso_datetime, ticket_type="single"):
     """
-    Build a pre-filled National Rail journey planner URL.
-    Correct parameter names: from, to, date (YYYYMMDD), time (HHMM).
+    Build a pre-filled Trainline booking URL.
+    nationalrail.co.uk/journey-planner is a React SPA that ignores query params.
+    Trainline supports deep-linking and handles National Rail tickets.
     """
     try:
         from datetime import datetime as _dt
         parsed = _dt.strptime(iso_datetime[:19], "%Y-%m-%dT%H:%M:%S")
-        date_str = parsed.strftime("%Y%m%d")   # "20260508"
-        time_str = parsed.strftime("%H%M")     # "0900"
+        # Trainline expects ISO 8601 date-time, URL-encoded
+        outward = parsed.strftime("%Y-%m-%dT%H:%M:%S")
     except Exception:
-        date_str = "20260101"
-        time_str = "0900"
-    type_code = "return" if ticket_type == "return" else "single"
+        outward = iso_datetime[:19] if iso_datetime else "2026-01-01T09:00:00"
     return (
-        f"https://www.nationalrail.co.uk/journey-planner/"
-        f"?from={origin_crs}&to={destination_crs}"
-        f"&date={date_str}&time={time_str}"
-        f"&timeoffset=0&type={type_code}"
+        f"https://www.thetrainline.com/book/results"
+        f"?origin={origin_crs}&destination={destination_crs}"
+        f"&outwardDate={outward}&adults=1&children=0"
+        f"&directTrains=false"
     )
 
 
