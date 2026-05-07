@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from database import get_connection, initialise_database
 from nlp.intent import get_intent
-from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london
+from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london, find_stations_fuzzy
 from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
 from engine.knowledge_base import get_kb
 
@@ -53,6 +53,16 @@ if "collected" not in st.session_state:
     }
 
 # ─── Knowledge Acquisition state ────────────────────────
+if "_confirm_prefix" not in st.session_state:
+    st.session_state._confirm_prefix = None
+
+# ─── Disambiguation state ────────────────────────────────
+if "disambig_options" not in st.session_state:
+    st.session_state.disambig_options = []   # list of (name, crs)
+if "disambig_for" not in st.session_state:
+    st.session_state.disambig_for = None     # "origin","destination","current_station","delay_dest"
+
+# ─── Knowledge Acquisition state ─────────────────────────
 if "ka_category" not in st.session_state:
     st.session_state.ka_category = None
 if "ka_question" not in st.session_state:
@@ -81,15 +91,47 @@ def log_to_db(user_msg, bot_msg, intent=None):
 
 
 def resolve_station(text: str, intent: str):
-    """Try to find a station name and CRS in text."""
+    """
+    Try to find a station. Returns (name, crs) on exact match,
+    or ("__ambiguous__", options_list) when multiple matches found,
+    or (raw_text, None) when nothing found.
+    """
+    text = text.strip()
+
+    # 1. Try exact / substring match in DB
     stations = find_stations_in_text(text)
-    if stations:
+    if len(stations) == 1:
         return stations[0][0], stations[0][1]
-    raw = text.strip().title()
-    if raw.lower() == "london":
-        name, crs = resolve_london("london", intent)
-        return name, crs
-    return raw, get_crs_code(raw)
+    if len(stations) > 1:
+        # Multiple exact matches — let user pick
+        return "__ambiguous__", stations[:3]
+
+    # 2. Fuzzy match
+    fuzzy = find_stations_fuzzy(text, limit=3)
+    if len(fuzzy) == 1:
+        return fuzzy[0][0], fuzzy[0][1]
+    if len(fuzzy) > 1:
+        return "__ambiguous__", fuzzy
+
+    # 3. Title-case direct lookup
+    raw = text.title()
+    crs = get_crs_code(raw)
+    if crs:
+        return raw, crs
+
+    return raw, None
+
+
+def build_disambig_prompt(options: list, context: str) -> str:
+    """Format a 'which station did you mean?' message."""
+    lines = "\n".join(
+        f"  {i+1}. {name}" for i, (name, _) in enumerate(options)
+    )
+    return (
+        f"I found a few stations matching '{context}':\n\n"
+        f"{lines}\n\n"
+        "Which one do you mean? Reply with the number."
+    )
 
 
 def process_message(user_input: str) -> str:
@@ -146,62 +188,124 @@ def process_message(user_input: str) -> str:
 
     # ── Step 3: If we're mid-conversation, collect the
     #    answer to the question we just asked ─────────────
-    if stage == "ask_origin":
+
+    # ── Disambiguation: user is picking from a numbered list ─
+    if stage == "disambiguate_station":
+        options = st.session_state.disambig_options
+        disambig_for = st.session_state.disambig_for
+        # Accept "1", "2", "3" or the station name directly
+        choice = user_input.strip()
+        picked = None
+        if choice in ("1", "2", "3") and int(choice) <= len(options):
+            picked = options[int(choice) - 1]
+        else:
+            # Maybe they typed the name directly
+            for opt in options:
+                if choice.lower() in opt[0].lower():
+                    picked = opt
+                    break
+        if not picked:
+            lines = "\n".join(f"  {i+1}. {n}" for i, (n, _) in enumerate(options))
+            return f"Please reply with a number:\n\n{lines}"
+        name, crs = picked
+        # Store in the right field
+        if disambig_for == "origin":
+            c["origin"] = name; c["origin_crs"] = crs
+            confirm = f"✅ Travelling from **{name}**."
+        elif disambig_for == "destination":
+            c["destination"] = name; c["destination_crs"] = crs
+            confirm = f"✅ Destination: **{name}**."
+        elif disambig_for == "current_station":
+            c["current_station"] = name; c["current_station_crs"] = crs
+            confirm = f"✅ Current station: **{name}**."
+        elif disambig_for == "delay_dest":
+            c["destination"] = name; c["destination_crs"] = crs
+            confirm = f"✅ Heading to **{name}**."
+        else:
+            confirm = f"✅ Got it — **{name}**."
+        st.session_state.disambig_options = []
+        st.session_state.disambig_for = None
+        st.session_state.stage = None
+        # Prepend confirm to whatever we ask next (fall through to Step 4)
+        st.session_state._confirm_prefix = confirm
+
+    elif stage == "ask_origin":
         name, crs = resolve_station(user_input, intent)
+        if name == "__ambiguous__":
+            st.session_state.disambig_options = crs  # crs holds options list here
+            st.session_state.disambig_for = "origin"
+            st.session_state.stage = "disambiguate_station"
+            return build_disambig_prompt(crs, user_input.strip())
         if not crs:
             return (f"Sorry, I couldn't find a station called '{name}'. "
-                    "Please try again — for example: Norwich, Southampton, Oxford.")
+                    "Try again — for example: Norwich, Southampton, Oxford.")
         c["origin"] = name
         c["origin_crs"] = crs
+        st.session_state._confirm_prefix = f"✅ Travelling from **{name}**."
         st.session_state.stage = None
 
     elif stage == "ask_destination":
         name, crs = resolve_station(user_input, intent)
+        if name == "__ambiguous__":
+            st.session_state.disambig_options = crs
+            st.session_state.disambig_for = "destination"
+            st.session_state.stage = "disambiguate_station"
+            return build_disambig_prompt(crs, user_input.strip())
         if not crs:
             return (f"Sorry, I couldn't find a station called '{name}'. "
-                    "Please try again — for example: London, Oxford, Winchester.")
+                    "Try again — for example: London, Oxford, Winchester.")
         c["destination"] = name
         c["destination_crs"] = crs
+        st.session_state._confirm_prefix = f"✅ Destination: **{name}**."
         st.session_state.stage = None
 
     elif stage == "ask_date":
-        entities = extract_entities(user_input, intent)
-        c["date"] = entities.get("date") or user_input.strip()
+        c["date"] = user_input.strip()
+        st.session_state._confirm_prefix = f"✅ Travel date: **{c['date']}**."
         st.session_state.stage = None
 
     elif stage == "ask_ticket_type":
         lower = user_input.lower()
         c["ticket_type"] = "return" if "return" in lower else "single"
+        st.session_state._confirm_prefix = f"✅ Ticket type: **{c['ticket_type']}**."
         st.session_state.stage = None
 
     elif stage == "ask_current_station":
         name, crs = resolve_station(user_input, intent)
+        if name == "__ambiguous__":
+            st.session_state.disambig_options = crs
+            st.session_state.disambig_for = "current_station"
+            st.session_state.stage = "disambiguate_station"
+            return build_disambig_prompt(crs, user_input.strip())
         if not crs:
-            return (f"Sorry, I couldn't find '{name}' on the Weymouth–Waterloo line. "
+            return (f"Sorry, I couldn't find '{name}'. "
                     "Try: Weymouth, Wareham, Poole, Bournemouth, Southampton, Winchester.")
         c["current_station"] = name
         c["current_station_crs"] = crs
+        st.session_state._confirm_prefix = f"✅ Current station: **{name}**."
         st.session_state.stage = None
 
     elif stage == "ask_delay_destination":
         name, crs = resolve_station(user_input, intent)
+        if name == "__ambiguous__":
+            st.session_state.disambig_options = crs
+            st.session_state.disambig_for = "delay_dest"
+            st.session_state.stage = "disambiguate_station"
+            return build_disambig_prompt(crs, user_input.strip())
         if not crs:
             return (f"Sorry, I couldn't find '{name}'. "
                     "Try: London Waterloo, Winchester, Southampton.")
         c["destination"] = name
         c["destination_crs"] = crs
+        st.session_state._confirm_prefix = f"✅ Heading to **{name}**."
         st.session_state.stage = None
 
     elif stage == "ask_planned_arrival":
-        entities = extract_entities(user_input, intent)
-        c["planned_arrival"] = (
-            entities.get("time") or
-            entities.get("date") or
-            user_input.strip()
-        )
+        c["planned_arrival"] = user_input.strip()
         now = datetime.now()
         c["day_of_week"] = now.weekday()
         c["month"] = now.month
+        st.session_state._confirm_prefix = f"✅ Scheduled arrival: **{c['planned_arrival']}**."
         st.session_state.stage = None
 
     # ─── KA stages ───────────────────────────────────────
@@ -250,21 +354,27 @@ def process_message(user_input: str) -> str:
         return summary
 
     # ── Step 4: Decide what to ask or do next ────────────
+    # Prepend any verbal confirmation from Step 3
+    def _reply(msg: str) -> str:
+        prefix = st.session_state.get("_confirm_prefix")
+        st.session_state._confirm_prefix = None
+        return f"{prefix}\n\n{msg}" if prefix else msg
+
     if intent == INTENT_BOOK_TICKET:
         if not c["origin"]:
             st.session_state.stage = "ask_origin"
-            return ("Sure! I can help you find the cheapest "
-                    "train ticket. Where are you travelling from?")
+            return _reply("Sure! I can help you find the cheapest "
+                          "train ticket. Where are you travelling from?")
         if not c["destination"]:
             st.session_state.stage = "ask_destination"
-            return "Great — and where are you travelling to?"
+            return _reply("And where are you travelling to?")
         if not c["date"]:
             st.session_state.stage = "ask_date"
-            return ("What date are you planning to travel? "
-                    "For example: 15th July.")
+            return _reply("What date are you planning to travel? "
+                          "For example: 15th July or tomorrow.")
         if not c["ticket_type"]:
             st.session_state.stage = "ask_ticket_type"
-            return "Would you like a single or return ticket?"
+            return _reply("Would you like a single or return ticket?")
 
         # All info collected — search for ticket
         from task1.ticket_api import find_cheapest_ticket
@@ -308,16 +418,15 @@ def process_message(user_input: str) -> str:
     elif intent == INTENT_PREDICT_DELAY:
         if not c["current_station"]:
             st.session_state.stage = "ask_current_station"
-            return ("I can help predict your arrival time. "
-                    "Which station is your train at currently?")
+            return _reply("I can help predict your arrival time. "
+                          "Which station is your train currently at?")
         if not c["destination"]:
             st.session_state.stage = "ask_delay_destination"
-            return "Where are you heading to?"
+            return _reply("And where are you heading to?")
         if not c["planned_arrival"]:
             st.session_state.stage = "ask_planned_arrival"
-            return ("What was the originally scheduled "
-                    "arrival time at your destination? "
-                    "For example: 11:30.")
+            return _reply("What was the originally scheduled arrival time? "
+                          "For example: 11:30.")
 
         # All info collected — predict delay
         from task2.predict import predict_delay
@@ -443,8 +552,23 @@ h1 {
 }
 [data-testid="stChatInput"] textarea {
     color: #1a1a2e !important;
+    background: #ffffff !important;
     font-family: 'Inter', sans-serif !important;
     font-size: 0.95rem !important;
+}
+[data-testid="stChatInput"] textarea::placeholder {
+    color: #9aa5b4 !important;
+}
+
+/* ── Strong/bold in messages ── */
+[data-testid="stChatMessage"] strong {
+    color: #1a1a2e !important;
+    font-weight: 600;
+}
+
+/* ── Main page background ── */
+section.main > div {
+    background-color: #f5f7fa;
 }
 </style>
 """, unsafe_allow_html=True)

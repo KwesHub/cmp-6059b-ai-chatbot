@@ -12,15 +12,57 @@ SOAP_URL = "https://ojp.nationalrail.co.uk/webservices"
 
 
 def format_datetime(date_string: str, hour: int = 9) -> str:
+    """
+    Parse natural language date/time strings including:
+    - "tomorrow", "next Monday", "15th July", "2026-07-15"
+    - "tomorrow at 9pm", "Friday 18:30"
+    Returns ISO format "YYYY-MM-DDTHH:MM:SS".
+    """
+    import re as _re
+    import dateparser
+
+    # Detect if user specified a time (e.g. "9pm", "18:30")
+    has_explicit_time = bool(_re.search(
+        r'\d+:\d+|\d+\s*(am|pm)', date_string, _re.IGNORECASE
+    ))
+
+    parsed = None
+    # Try 1: with PREFER_DATES_FROM=future (handles "tomorrow", "next Monday")
+    try:
+        parsed = dateparser.parse(
+            date_string,
+            settings={
+                "PREFER_DATES_FROM": "future",
+                "RETURN_AS_TIMEZONE_AWARE": False,
+                "DATE_ORDER": "DMY",
+            }
+        )
+    except Exception:
+        pass
+
+    # Try 2: no settings (handles ISO "2026-07-15" which future-pref can block)
+    if not parsed:
+        try:
+            parsed = dateparser.parse(date_string)
+        except Exception:
+            pass
+
+    if parsed:
+        # Override time with default if user didn't mention one
+        if not has_explicit_time:
+            parsed = parsed.replace(hour=hour, minute=0, second=0)
+        return parsed.strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Fallback: strip ordinals and try strptime
     try:
         clean = date_string.replace("st","").replace("nd","")
         clean = clean.replace("rd","").replace("th","").strip()
         for fmt in ["%d %B %Y", "%d %B", "%B %d", "%Y-%m-%d", "%d/%m/%Y"]:
             try:
-                parsed = datetime.strptime(clean, fmt)
-                if parsed.year == 1900:
-                    parsed = parsed.replace(year=datetime.now().year)
-                return parsed.strftime(f"%Y-%m-%dT{hour:02d}:00:00")
+                p = datetime.strptime(clean, fmt)
+                if p.year == 1900:
+                    p = p.replace(year=datetime.now().year)
+                return p.strftime(f"%Y-%m-%dT{hour:02d}:00:00")
             except ValueError:
                 continue
     except Exception:
@@ -74,9 +116,12 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 
 
 def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
+    date_part = date[:10]
+    time_part = date[11:16].replace(":", "") if len(date) > 10 else "0900"
     booking_url = (
         f"https://www.nationalrail.co.uk/journey-planner/"
-        f"?from={origin_crs}&to={destination_crs}&date={date[:10]}"
+        f"?from={origin_crs}&to={destination_crs}"
+        f"&date={date_part}&time={time_part}&timeoffset=0&type=single"
     )
     try:
         import xml.etree.ElementTree as ET
@@ -153,9 +198,14 @@ def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
 def find_cheapest_ticket(origin_crs, destination_crs, date_string,
                           time_string=None, return_date=None):
     travel_date = format_datetime(date_string, hour=9)
+    # Build a proper NR journey planner URL with date AND time
+    # Format: YYYY-MM-DD for date, HHMM for time
+    date_part = travel_date[:10]                    # "2026-07-15"
+    time_part = travel_date[11:16].replace(":", "") # "0900"
     booking_url = (
         f"https://www.nationalrail.co.uk/journey-planner/"
-        f"?from={origin_crs}&to={destination_crs}&date={travel_date[:10]}"
+        f"?from={origin_crs}&to={destination_crs}"
+        f"&date={date_part}&time={time_part}&timeoffset=0&type=single"
     )
     try:
         is_return = return_date is not None

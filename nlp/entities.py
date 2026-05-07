@@ -53,6 +53,34 @@ def find_stations_in_text(user_input: str) -> list:
     found.sort(key=lambda x: x[0])
     return [(name, code) for _, name, code in found]
 
+
+def find_stations_fuzzy(query: str, limit: int = 3) -> list:
+    """
+    Return up to `limit` station matches for an ambiguous query.
+    Priority:
+      1. Starts-with match (e.g. "London" → "London Liverpool Street" first)
+      2. Contains match   (e.g. "Street" → "London Liverpool Street")
+    Returns list of (station_name, crs_code).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT station_name, crs_code FROM station_codes")
+    all_stations = cursor.fetchall()
+    conn.close()
+
+    q = query.lower().strip()
+    starts = []
+    contains = []
+    for name, crs in all_stations:
+        nl = name.lower()
+        if nl.startswith(q):
+            starts.append((name, crs))
+        elif q in nl:
+            contains.append((name, crs))
+
+    results = starts + contains
+    return results[:limit]
+
 def resolve_london(station_name: str, intent: str = None) -> tuple:
     """
     'London' is ambiguous — map it to the most likely station
