@@ -119,6 +119,33 @@ def process_message(user_input: str) -> str:
         st.session_state.intent = detected
     intent = st.session_state.intent or INTENT_UNKNOWN
 
+    # ── Step 2b: Intent changed mid-flow — reset stage ────
+    # If the user switched topics while we were mid-conversation
+    # (e.g. typed "my train is delayed" while we were asking for
+    # an origin station), reset everything and start fresh.
+    if stage is not None and detected != INTENT_UNKNOWN:
+        stage_intent_map = {
+            "ask_origin": INTENT_BOOK_TICKET,
+            "ask_destination": INTENT_BOOK_TICKET,
+            "ask_date": INTENT_BOOK_TICKET,
+            "ask_ticket_type": INTENT_BOOK_TICKET,
+            "ask_current_station": INTENT_PREDICT_DELAY,
+            "ask_delay_destination": INTENT_PREDICT_DELAY,
+            "ask_planned_arrival": INTENT_PREDICT_DELAY,
+            "ka_ask_category": INTENT_ADD_RULE,
+            "ka_ask_question": INTENT_ADD_RULE,
+            "ka_ask_keywords": INTENT_ADD_RULE,
+            "ka_ask_answer": INTENT_ADD_RULE,
+        }
+        expected = stage_intent_map.get(stage)
+        if expected and detected != expected:
+            st.session_state.stage = None
+            st.session_state.collected = {k: None for k in c}
+            st.session_state.intent = detected
+            stage = None
+            intent = detected
+            c = st.session_state.collected
+
     # ── Step 3: If we're mid-conversation, collect the
     #    answer to the question we just asked ─────────────
     if stage == "ask_origin":
