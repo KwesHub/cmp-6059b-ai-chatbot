@@ -40,9 +40,15 @@ def find_stations_in_text(user_input: str) -> list:
     text_lower = user_input.lower()
 
     for station_name, crs_code in all_stations:
-        if station_name.lower() in text_lower:
-            pos = text_lower.index(station_name.lower())
+        station_lower = station_name.lower()
+        if station_lower in text_lower:
+            # Full station name found in text (e.g. "Southampton Central" in text)
+            pos = text_lower.index(station_lower)
             found.append((pos, station_name, crs_code))
+        elif len(text_lower) >= 4 and text_lower in station_lower:
+            # User typed a prefix/substring of the station name
+            # e.g. "southampton" matches "Southampton Central"
+            found.append((0, station_name, crs_code))
 
     found.sort(key=lambda x: x[0])
     return [(name, code) for _, name, code in found]
