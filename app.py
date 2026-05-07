@@ -132,10 +132,9 @@ def process_message(user_input: str) -> str:
             "ask_current_station": INTENT_PREDICT_DELAY,
             "ask_delay_destination": INTENT_PREDICT_DELAY,
             "ask_planned_arrival": INTENT_PREDICT_DELAY,
-            "ka_ask_category": INTENT_ADD_RULE,
-            "ka_ask_question": INTENT_ADD_RULE,
-            "ka_ask_keywords": INTENT_ADD_RULE,
-            "ka_ask_answer": INTENT_ADD_RULE,
+            # ka_ask_* stages are intentionally excluded — in those stages
+            # the user is typing question/keyword/answer content, not intent.
+            # e.g. "Do you offer group tickets?" should NOT trigger BOOK_TICKET.
         }
         expected = stage_intent_map.get(stage)
         if expected and detected != expected:
