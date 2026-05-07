@@ -371,52 +371,80 @@ def process_message(user_input: str) -> str:
 # ─── UI ──────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* Page background */
-.stApp { background-color: #0d1b2a; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
-/* Chat message bubbles */
+/* ── Base ── */
+html, body, .stApp {
+    font-family: 'Inter', sans-serif;
+    background-color: #f5f7fa;
+}
+
+/* ── Header / title area ── */
+h1 {
+    color: #1a1a2e !important;
+    font-weight: 600 !important;
+    font-size: 1.6rem !important;
+    letter-spacing: -0.3px;
+}
+.stCaption { color: #9aa5b4 !important; font-size: 0.75rem !important; }
+
+/* ── Chat container background ── */
+[data-testid="stChatMessageContainer"] {
+    background: transparent;
+}
+
+/* ── All message bubbles ── */
 [data-testid="stChatMessage"] {
-    border-radius: 12px;
-    padding: 10px 14px;
-    margin-bottom: 6px;
+    background: #ffffff;
+    border-radius: 14px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    border: 1px solid #e8ecf0;
 }
 
-/* Bot messages — dark navy card */
+/* ── Bot messages — slight blue tint on left border ── */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-    background-color: #1a2e45;
-    border-left: 3px solid #e84343;
+    border-left: 3px solid #1a56db;
+    background: #ffffff;
 }
 
-/* User messages — slightly lighter */
+/* ── User messages — slightly grey ── */
 [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-    background-color: #162032;
+    background: #f0f4ff;
+    border-left: 3px solid #6b7adb;
 }
 
-/* All message text white for contrast */
+/* ── Message text ── */
 [data-testid="stChatMessage"] p,
-[data-testid="stChatMessage"] li,
-[data-testid="stChatMessage"] a {
-    color: #f0f4f8 !important;
+[data-testid="stChatMessage"] li {
+    color: #1a1a2e !important;
+    font-size: 0.95rem !important;
+    line-height: 1.6 !important;
 }
 
-/* Links stand out in the train red */
+/* ── Links ── */
 [data-testid="stChatMessage"] a {
-    color: #e84343 !important;
-    font-weight: 600;
+    color: #1a56db !important;
+    font-weight: 500;
+    text-decoration: underline;
 }
 
-/* Title */
-h1 { color: #f0f4f8 !important; }
-
-/* Caption / session ID */
-.stCaption { color: #8fa3b1 !important; }
-
-/* Input box */
+/* ── Input box ── */
+[data-testid="stChatInput"] {
+    background: #ffffff !important;
+    border: 1.5px solid #d0d7de !important;
+    border-radius: 12px !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
+}
+[data-testid="stChatInput"]:focus-within {
+    border-color: #1a56db !important;
+    box-shadow: 0 0 0 3px rgba(26,86,219,0.12) !important;
+}
 [data-testid="stChatInput"] textarea {
-    background-color: #1a2e45 !important;
-    color: #f0f4f8 !important;
-    border: 1px solid #e84343 !important;
-    border-radius: 8px;
+    color: #1a1a2e !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.95rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
