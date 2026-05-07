@@ -291,9 +291,19 @@ def process_message(user_input: str) -> str:
                 f"{result['arrival'][:16].replace('T',' ')}\n\n"
                 f"[Book here]({result['booking_url']})"
             )
+        error_msg = result.get("error", "No fares available")
+        if "timed out" in error_msg.lower():
+            reason = "The National Rail API timed out."
+        elif "HTTP" in error_msg:
+            reason = "The National Rail API is temporarily unavailable."
+        elif "No fares" in error_msg:
+            reason = f"No fares were found for that route on {c.get('date', 'that date')}."
+        else:
+            reason = "The ticket search couldn't be completed right now."
         return (
-            f"I couldn't find a fare right now. "
-            f"[Search directly here]({result['booking_url']})"
+            f"⚠️ {reason}\n\n"
+            f"You can still search and book directly on the National Rail website:\n\n"
+            f"[Search for tickets →]({result['booking_url']})"
         )
 
     elif intent == INTENT_PREDICT_DELAY:
@@ -360,6 +370,58 @@ def process_message(user_input: str) -> str:
 
 
 # ─── UI ──────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* Page background */
+.stApp { background-color: #0d1b2a; }
+
+/* Chat message bubbles */
+[data-testid="stChatMessage"] {
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 6px;
+}
+
+/* Bot messages — dark navy card */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    background-color: #1a2e45;
+    border-left: 3px solid #e84343;
+}
+
+/* User messages — slightly lighter */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    background-color: #162032;
+}
+
+/* All message text white for contrast */
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessage"] a {
+    color: #f0f4f8 !important;
+}
+
+/* Links stand out in the train red */
+[data-testid="stChatMessage"] a {
+    color: #e84343 !important;
+    font-weight: 600;
+}
+
+/* Title */
+h1 { color: #f0f4f8 !important; }
+
+/* Caption / session ID */
+.stCaption { color: #8fa3b1 !important; }
+
+/* Input box */
+[data-testid="stChatInput"] textarea {
+    background-color: #1a2e45 !important;
+    color: #f0f4f8 !important;
+    border: 1px solid #e84343 !important;
+    border-radius: 8px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🚂 Train Assistant Chatbot")
 st.caption(f"Session: {st.session_state.session_id[:8]}...")
 
