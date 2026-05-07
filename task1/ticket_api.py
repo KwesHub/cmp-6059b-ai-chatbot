@@ -118,25 +118,22 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 def _ojp_url(origin_crs, destination_crs, iso_datetime, ticket_type="single"):
     """
     Build a pre-filled National Rail journey planner URL.
-    Date format: DDMMYY (e.g. 8 May 2026 → 080526)
+    Correct parameter names: from, to, date (YYYYMMDD), time (HHMM).
     """
     try:
         from datetime import datetime as _dt
         parsed = _dt.strptime(iso_datetime[:19], "%Y-%m-%dT%H:%M:%S")
-        leaving_date = parsed.strftime("%d%m%y")   # "080526"
-        leaving_hour = parsed.strftime("%H")        # "09"
-        leaving_min  = parsed.strftime("%M")        # "00"
+        date_str = parsed.strftime("%Y%m%d")   # "20260508"
+        time_str = parsed.strftime("%H%M")     # "0900"
     except Exception:
-        leaving_date = "010126"
-        leaving_hour = "09"
-        leaving_min  = "00"
-    type_code = "R" if ticket_type == "return" else "S"
+        date_str = "20260101"
+        time_str = "0900"
+    type_code = "return" if ticket_type == "return" else "single"
     return (
         f"https://www.nationalrail.co.uk/journey-planner/"
-        f"?origin={origin_crs}&destination={destination_crs}"
-        f"&leavingType=departing&leavingDate={leaving_date}"
-        f"&leavingHour={leaving_hour}&leavingMin={leaving_min}"
-        f"&adults=1&children=0&railcards=&class=S&type={type_code}"
+        f"?from={origin_crs}&to={destination_crs}"
+        f"&date={date_str}&time={time_str}"
+        f"&timeoffset=0&type={type_code}"
     )
 
 
