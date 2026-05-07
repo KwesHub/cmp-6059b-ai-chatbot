@@ -95,27 +95,40 @@ def initialise_database():
 
 
 def seed_station_codes():
-    """Insert the core station codes if not already present."""
-    stations = [
-        ("Norwich", "NRW"),
-        ("London Liverpool Street", "LST"),
-        ("London Waterloo", "WAT"),
-        ("London Paddington", "PAD"),
-        ("Oxford", "OXF"),
-        ("Weymouth", "WEY"),
-        ("Southampton Central", "SOU"),
-        ("Winchester", "WIN"),
-        ("Bournemouth", "BMH"),
-        ("Poole", "POO"),
-        ("Wareham", "WRM"),
-        ("Dorchester South", "DCH"),
-        ("Cambridge", "CBG"),
-        ("Birmingham New Street", "BHM"),
-        ("Manchester Piccadilly", "MAN"),
-        ("Bristol Temple Meads", "BRI"),
-        ("Edinburgh Waverley", "EDB"),
-        ("Glasgow Central", "GLC"),
-    ]
+    """
+    Load ALL stations from data/StationNameAndCode.csv into the DB.
+    Falls back to a hardcoded list if the CSV isn't found.
+    """
+    import os, csv
+    csv_path = os.path.join(os.path.dirname(__file__), "data", "StationNameAndCode.csv")
+
+    stations = []
+    if os.path.exists(csv_path):
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 2:
+                    name = row[0].strip().title()   # "SHEFFIELD" → "Sheffield"
+                    crs  = row[1].strip().upper()
+                    if name and crs:
+                        stations.append((name, crs))
+        print(f"Loading {len(stations)} stations from CSV...")
+    else:
+        # Fallback hardcoded list
+        stations = [
+            ("Norwich", "NRW"), ("London Liverpool Street", "LST"),
+            ("London Waterloo", "WAT"), ("London Paddington", "PAD"),
+            ("Oxford", "OXF"), ("Weymouth", "WEY"),
+            ("Southampton Central", "SOU"), ("Winchester", "WIN"),
+            ("Bournemouth", "BMH"), ("Poole", "POO"),
+            ("Wareham", "WRM"), ("Dorchester South", "DCH"),
+            ("Cambridge", "CBG"), ("Birmingham New Street", "BHM"),
+            ("Manchester Piccadilly", "MAN"), ("Bristol Temple Meads", "BRI"),
+            ("Edinburgh Waverley", "EDB"), ("Glasgow Central", "GLC"),
+            ("Sheffield", "SHF"), ("Leeds", "LDS"),
+            ("Liverpool Lime Street", "LIV"), ("Brighton", "BTN"),
+            ("Exeter St Davids", "EXD"), ("Cardiff Central", "CDF"),
+        ]
 
     conn = get_connection()
     cursor = conn.cursor()

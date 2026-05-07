@@ -1,7 +1,7 @@
 import streamlit as st
 import uuid
 from datetime import datetime
-from database import get_connection, initialise_database
+from database import get_connection, initialise_database, seed_station_codes
 from nlp.intent import get_intent
 from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london, find_stations_fuzzy, find_station_by_typo
 from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
@@ -15,6 +15,7 @@ st.set_page_config(
 
 if "db_ready" not in st.session_state:
     initialise_database()
+    seed_station_codes()   # loads ALL stations from CSV
     st.session_state.db_ready = True
 
 if "session_id" not in st.session_state:

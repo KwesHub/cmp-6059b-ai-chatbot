@@ -201,7 +201,13 @@ def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
 
 def find_cheapest_ticket(origin_crs, destination_crs, date_string,
                           time_string=None, return_date=None):
-    travel_date = format_datetime(date_string, hour=9)
+    # If already ISO format (e.g. "2026-05-08T21:00:00"), use directly.
+    # Re-parsing with DATE_ORDER=DMY would swap day/month.
+    import re as _re
+    if _re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}', str(date_string)):
+        travel_date = date_string
+    else:
+        travel_date = format_datetime(date_string, hour=9)
     booking_url = _ojp_url(origin_crs, destination_crs, travel_date)
     try:
         is_return = return_date is not None
