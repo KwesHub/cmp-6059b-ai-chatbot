@@ -97,13 +97,29 @@ def process_message(user_input: str) -> str:
     c = st.session_state.collected
     stage = st.session_state.stage
 
-    # ── Step 1: Detect intent ─────────────────────────────
+    # ── Step 1: KB check — if not mid-conversation, check
+    #    the knowledge base first before doing intent routing.
+    #    This prevents KB questions like "Do you offer group
+    #    tickets?" being swallowed by the book_ticket intent.
+    if stage is None:
+        kb = get_kb()
+        kb_result = kb.search_qa(user_input)
+        # Only use KB answer if it's not a clear booking/delay
+        # trigger — those should still go through the full flow
+        booking_triggers = {"book", "find", "buy", "cheapest", "price", "fare"}
+        delay_triggers = {"delay", "late", "arrival", "predict", "arrive"}
+        words = set(user_input.lower().split())
+        is_transactional = bool(words & booking_triggers) or bool(words & delay_triggers)
+        if kb_result and not is_transactional:
+            return kb_result["answer"]
+
+    # ── Step 2: Detect intent ─────────────────────────────
     detected = get_intent(user_input)
     if detected != INTENT_UNKNOWN:
         st.session_state.intent = detected
     intent = st.session_state.intent or INTENT_UNKNOWN
 
-    # ── Step 2: If we're mid-conversation, collect the
+    # ── Step 3: If we're mid-conversation, collect the
     #    answer to the question we just asked ─────────────
     if stage == "ask_origin":
         name, crs = resolve_station(user_input, intent)
@@ -196,7 +212,7 @@ def process_message(user_input: str) -> str:
         st.session_state.intent = None
         return summary
 
-    # ── Step 3: Decide what to ask or do next ────────────
+    # ── Step 4: Decide what to ask or do next ────────────
     if intent == INTENT_BOOK_TICKET:
         if not c["origin"]:
             st.session_state.stage = "ask_origin"
@@ -295,12 +311,6 @@ def process_message(user_input: str) -> str:
         return ("Sure, I can learn something new! "
                 "What category should this go in? "
                 "For example: ticket_types, booking_policies, delays")
-
-    # ─── KB query fallback — check KB before giving up ───
-    kb = get_kb()
-    kb_result = kb.search_qa(user_input)
-    if kb_result:
-        return kb_result["answer"]
 
     else:
         return (
