@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from database import get_connection, initialise_database
 from nlp.intent import get_intent
-from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london, find_stations_fuzzy
+from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london, find_stations_fuzzy, find_station_by_typo
 from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
 from engine.knowledge_base import get_kb
 
@@ -55,6 +55,12 @@ if "collected" not in st.session_state:
 # ─── Knowledge Acquisition state ────────────────────────
 if "_confirm_prefix" not in st.session_state:
     st.session_state._confirm_prefix = None
+if "typo_suggestion" not in st.session_state:
+    st.session_state.typo_suggestion = None   # (name, crs) pending typo confirmation
+if "typo_stage_return" not in st.session_state:
+    st.session_state.typo_stage_return = None # stage to resume after typo confirm
+if "parsed_date" not in st.session_state:
+    st.session_state.parsed_date = None       # ISO date string pending confirmation
 
 # ─── Disambiguation state ────────────────────────────────
 if "disambig_options" not in st.session_state:
@@ -119,6 +125,11 @@ def resolve_station(text: str, intent: str):
     if crs:
         return raw, crs
 
+    # 4. Typo / close-match suggestion
+    typo_name, typo_crs = find_station_by_typo(text)
+    if typo_name:
+        return "__typo__", (typo_name, typo_crs)
+
     return raw, None
 
 
@@ -169,13 +180,14 @@ def process_message(user_input: str) -> str:
             "ask_origin": INTENT_BOOK_TICKET,
             "ask_destination": INTENT_BOOK_TICKET,
             "ask_date": INTENT_BOOK_TICKET,
+            "confirm_date": INTENT_BOOK_TICKET,
             "ask_ticket_type": INTENT_BOOK_TICKET,
+            "disambiguate_station": None,  # handled by disambig_for context
+            "confirm_typo": None,          # protected — user is answering yes/no
             "ask_current_station": INTENT_PREDICT_DELAY,
             "ask_delay_destination": INTENT_PREDICT_DELAY,
             "ask_planned_arrival": INTENT_PREDICT_DELAY,
-            # ka_ask_* stages are intentionally excluded — in those stages
-            # the user is typing question/keyword/answer content, not intent.
-            # e.g. "Do you offer group tickets?" should NOT trigger BOOK_TICKET.
+            # ka_ask_* excluded — user types content, not intent
         }
         expected = stage_intent_map.get(stage)
         if expected and detected != expected:
@@ -193,20 +205,35 @@ def process_message(user_input: str) -> str:
     if stage == "disambiguate_station":
         options = st.session_state.disambig_options
         disambig_for = st.session_state.disambig_for
-        # Accept "1", "2", "3" or the station name directly
         choice = user_input.strip()
         picked = None
+
+        # Accept a number
         if choice in ("1", "2", "3") and int(choice) <= len(options):
             picked = options[int(choice) - 1]
         else:
-            # Maybe they typed the name directly
+            # Try matching against the listed options
             for opt in options:
                 if choice.lower() in opt[0].lower():
                     picked = opt
                     break
+
         if not picked:
-            lines = "\n".join(f"  {i+1}. {n}" for i, (n, _) in enumerate(options))
-            return f"Please reply with a number:\n\n{lines}"
+            # User typed something entirely different — treat as a new station query
+            new_name, new_crs = resolve_station(user_input, intent)
+            if new_name not in ("__ambiguous__", "__typo__") and new_crs:
+                # They typed a valid new station — accept it
+                picked = (new_name, new_crs)
+            elif new_name == "__ambiguous__":
+                # New ambiguous query — start fresh disambiguation
+                st.session_state.disambig_options = new_crs
+                st.session_state.stage = "disambiguate_station"
+                return build_disambig_prompt(new_crs, user_input.strip())
+            else:
+                # Still can't find it — show options again
+                lines = "\n".join(f"  {i+1}. {n}" for i, (n, _) in enumerate(options))
+                return (f"I didn't recognise that. Please reply with a number, "
+                        f"or type a different station name:\n\n{lines}")
         name, crs = picked
         # Store in the right field
         if disambig_for == "origin":
@@ -229,13 +256,62 @@ def process_message(user_input: str) -> str:
         # Prepend confirm to whatever we ask next (fall through to Step 4)
         st.session_state._confirm_prefix = confirm
 
+    elif stage == "confirm_typo":
+        # User is confirming/rejecting a typo suggestion
+        answer = user_input.strip().lower()
+        if answer in ("yes", "y", "yeah", "yep", "correct", "ok", "sure"):
+            name, crs = st.session_state.typo_suggestion
+            return_stage = st.session_state.typo_stage_return
+            st.session_state.typo_suggestion = None
+            st.session_state.typo_stage_return = None
+            st.session_state.stage = None
+            if return_stage == "ask_origin":
+                c["origin"] = name; c["origin_crs"] = crs
+                st.session_state._confirm_prefix = f"✅ Travelling from **{name}**."
+            elif return_stage == "ask_destination":
+                c["destination"] = name; c["destination_crs"] = crs
+                st.session_state._confirm_prefix = f"✅ Destination: **{name}**."
+            elif return_stage == "ask_current_station":
+                c["current_station"] = name; c["current_station_crs"] = crs
+                st.session_state._confirm_prefix = f"✅ Current station: **{name}**."
+            elif return_stage == "ask_delay_destination":
+                c["destination"] = name; c["destination_crs"] = crs
+                st.session_state._confirm_prefix = f"✅ Heading to **{name}**."
+        else:
+            # Rejected — go back to asking for the station
+            st.session_state.typo_suggestion = None
+            st.session_state.stage = st.session_state.typo_stage_return
+            st.session_state.typo_stage_return = None
+            return "No problem — please try again with the station name."
+
+    elif stage == "confirm_date":
+        # User is confirming the parsed date shown to them
+        answer = user_input.strip().lower()
+        if answer in ("yes", "y", "yeah", "yep", "correct", "ok", "sure", "that's right", "thats right"):
+            c["date"] = st.session_state.parsed_date
+            st.session_state.parsed_date = None
+            st.session_state.stage = None
+            st.session_state._confirm_prefix = f"✅ Travel date confirmed."
+        else:
+            # They said no or typed a correction — treat as new date
+            st.session_state.parsed_date = None
+            st.session_state.stage = "ask_date"
+            c["date"] = None
+            return "No problem — what date would you like to travel? For example: 15th July or tomorrow."
+
     elif stage == "ask_origin":
         name, crs = resolve_station(user_input, intent)
         if name == "__ambiguous__":
-            st.session_state.disambig_options = crs  # crs holds options list here
+            st.session_state.disambig_options = crs
             st.session_state.disambig_for = "origin"
             st.session_state.stage = "disambiguate_station"
             return build_disambig_prompt(crs, user_input.strip())
+        if name == "__typo__":
+            sug_name, sug_crs = crs  # crs holds (name, crs) here
+            st.session_state.typo_suggestion = (sug_name, sug_crs)
+            st.session_state.typo_stage_return = "ask_origin"
+            st.session_state.stage = "confirm_typo"
+            return f"Did you mean **{sug_name}**? (yes / no)"
         if not crs:
             return (f"Sorry, I couldn't find a station called '{name}'. "
                     "Try again — for example: Norwich, Southampton, Oxford.")
@@ -251,6 +327,12 @@ def process_message(user_input: str) -> str:
             st.session_state.disambig_for = "destination"
             st.session_state.stage = "disambiguate_station"
             return build_disambig_prompt(crs, user_input.strip())
+        if name == "__typo__":
+            sug_name, sug_crs = crs
+            st.session_state.typo_suggestion = (sug_name, sug_crs)
+            st.session_state.typo_stage_return = "ask_destination"
+            st.session_state.stage = "confirm_typo"
+            return f"Did you mean **{sug_name}**? (yes / no)"
         if not crs:
             return (f"Sorry, I couldn't find a station called '{name}'. "
                     "Try again — for example: London, Oxford, Winchester.")
@@ -260,9 +342,21 @@ def process_message(user_input: str) -> str:
         st.session_state.stage = None
 
     elif stage == "ask_date":
-        c["date"] = user_input.strip()
-        st.session_state._confirm_prefix = f"✅ Travel date: **{c['date']}**."
-        st.session_state.stage = None
+        from task1.ticket_api import format_datetime
+        raw_input = user_input.strip()
+        parsed_iso = format_datetime(raw_input, hour=9)
+        # Show the parsed date in readable format and ask to confirm
+        try:
+            from datetime import datetime as _dt
+            parsed_dt = _dt.strptime(parsed_iso, "%Y-%m-%dT%H:%M:%S")
+            readable = parsed_dt.strftime("%-d %B %Y")  # e.g. "8 May 2026"
+            if parsed_dt.hour != 9 or parsed_dt.minute != 0:
+                readable += parsed_dt.strftime(" at %H:%M")
+        except Exception:
+            readable = raw_input
+        st.session_state.parsed_date = parsed_iso
+        st.session_state.stage = "confirm_date"
+        return f"Just to confirm — you'd like to travel on **{readable}**. Is that right? (yes / no)"
 
     elif stage == "ask_ticket_type":
         lower = user_input.lower()
@@ -277,6 +371,12 @@ def process_message(user_input: str) -> str:
             st.session_state.disambig_for = "current_station"
             st.session_state.stage = "disambiguate_station"
             return build_disambig_prompt(crs, user_input.strip())
+        if name == "__typo__":
+            sug_name, sug_crs = crs
+            st.session_state.typo_suggestion = (sug_name, sug_crs)
+            st.session_state.typo_stage_return = "ask_current_station"
+            st.session_state.stage = "confirm_typo"
+            return f"Did you mean **{sug_name}**? (yes / no)"
         if not crs:
             return (f"Sorry, I couldn't find '{name}'. "
                     "Try: Weymouth, Wareham, Poole, Bournemouth, Southampton, Winchester.")
@@ -292,6 +392,12 @@ def process_message(user_input: str) -> str:
             st.session_state.disambig_for = "delay_dest"
             st.session_state.stage = "disambiguate_station"
             return build_disambig_prompt(crs, user_input.strip())
+        if name == "__typo__":
+            sug_name, sug_crs = crs
+            st.session_state.typo_suggestion = (sug_name, sug_crs)
+            st.session_state.typo_stage_return = "ask_delay_destination"
+            st.session_state.stage = "confirm_typo"
+            return f"Did you mean **{sug_name}**? (yes / no)"
         if not crs:
             return (f"Sorry, I couldn't find '{name}'. "
                     "Try: London Waterloo, Winchester, Southampton.")
@@ -377,11 +483,14 @@ def process_message(user_input: str) -> str:
             return _reply("Would you like a single or return ticket?")
 
         # All info collected — search for ticket
-        from task1.ticket_api import find_cheapest_ticket
+        # c["date"] is now an ISO string e.g. "2026-07-15T09:00:00"
+        # Pass it directly so format_datetime doesn't re-parse and drift
+        from task1.ticket_api import find_cheapest_ticket, format_datetime, _ojp_url
+        travel_iso = c["date"] if "T" in str(c["date"]) else format_datetime(c["date"])
         result = find_cheapest_ticket(
             origin_crs=c["origin_crs"] or "NRW",
             destination_crs=c["destination_crs"] or "LST",
-            date_string=c["date"]
+            date_string=travel_iso
         )
         # Reset for next conversation
         st.session_state.intent = None
@@ -539,25 +648,33 @@ h1 {
     text-decoration: underline;
 }
 
-/* ── Input box ── */
+/* ── Input box — dark bg, white text ── */
 [data-testid="stChatInput"] {
-    background: #ffffff !important;
-    border: 1.5px solid #d0d7de !important;
+    background: #1a1a2e !important;
+    border: 1.5px solid #2e3a5c !important;
     border-radius: 12px !important;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.06) !important;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2) !important;
 }
 [data-testid="stChatInput"]:focus-within {
     border-color: #1a56db !important;
-    box-shadow: 0 0 0 3px rgba(26,86,219,0.12) !important;
+    box-shadow: 0 0 0 3px rgba(26,86,219,0.25) !important;
 }
 [data-testid="stChatInput"] textarea {
-    color: #1a1a2e !important;
-    background: #ffffff !important;
+    color: #f0f4f8 !important;
+    background: #1a1a2e !important;
     font-family: 'Inter', sans-serif !important;
     font-size: 0.95rem !important;
 }
 [data-testid="stChatInput"] textarea::placeholder {
-    color: #9aa5b4 !important;
+    color: #6b7aad !important;
+}
+/* send button */
+[data-testid="stChatInput"] button {
+    background: #1a56db !important;
+    border-radius: 8px !important;
+}
+[data-testid="stChatInput"] button svg {
+    fill: #ffffff !important;
 }
 
 /* ── Strong/bold in messages ── */

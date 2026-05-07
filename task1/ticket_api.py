@@ -115,14 +115,18 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 </soapenv:Envelope>"""
 
 
-def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
-    date_part = date[:10]
-    time_part = date[11:16].replace(":", "") if len(date) > 10 else "0900"
-    booking_url = (
-        f"https://www.nationalrail.co.uk/journey-planner/"
-        f"?from={origin_crs}&to={destination_crs}"
-        f"&date={date_part}&time={time_part}&timeoffset=0&type=single"
+def _ojp_url(origin_crs, destination_crs, iso_datetime):
+    """Build the correct OJP times-and-fares URL."""
+    date_compact = iso_datetime[:10].replace("-", "")  # "20260715"
+    time_compact = iso_datetime[11:16].replace(":", "")  # "0900"
+    return (
+        f"https://ojp.nationalrail.co.uk/service/timesandfares"
+        f"/{origin_crs}/{destination_crs}/{date_compact}/{time_compact}/dep"
     )
+
+
+def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
+    booking_url = _ojp_url(origin_crs, destination_crs, date)
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(xml_text)
@@ -198,15 +202,7 @@ def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
 def find_cheapest_ticket(origin_crs, destination_crs, date_string,
                           time_string=None, return_date=None):
     travel_date = format_datetime(date_string, hour=9)
-    # Build a proper NR journey planner URL with date AND time
-    # Format: YYYY-MM-DD for date, HHMM for time
-    date_part = travel_date[:10]                    # "2026-07-15"
-    time_part = travel_date[11:16].replace(":", "") # "0900"
-    booking_url = (
-        f"https://www.nationalrail.co.uk/journey-planner/"
-        f"?from={origin_crs}&to={destination_crs}"
-        f"&date={date_part}&time={time_part}&timeoffset=0&type=single"
-    )
+    booking_url = _ojp_url(origin_crs, destination_crs, travel_date)
     try:
         is_return = return_date is not None
         return_dt = format_datetime(return_date) if return_date else None

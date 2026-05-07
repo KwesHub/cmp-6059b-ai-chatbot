@@ -81,6 +81,52 @@ def find_stations_fuzzy(query: str, limit: int = 3) -> list:
     results = starts + contains
     return results[:limit]
 
+
+def find_station_by_typo(query: str) -> tuple:
+    """
+    Use difflib to find the closest station name for a misspelled query.
+    Returns (station_name, crs_code) if a close match is found, else (None, None).
+    e.g. "norich" → ("Norwich", "NRW")
+    """
+    import difflib
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT station_name, crs_code FROM station_codes")
+    all_stations = cursor.fetchall()
+    conn.close()
+
+    station_names = [s[0] for s in all_stations]
+    name_to_crs = {s[0]: s[1] for s in all_stations}
+
+    # Try matching against full names and also first words of multi-word names
+    matches = difflib.get_close_matches(
+        query.lower(),
+        [n.lower() for n in station_names],
+        n=1,
+        cutoff=0.6
+    )
+    if matches:
+        # Find the original-case name
+        for name in station_names:
+            if name.lower() == matches[0]:
+                return name, name_to_crs[name]
+
+    # Also try first word only (e.g. "norich" against "Norwich")
+    first_words = {}
+    for name in station_names:
+        fw = name.split()[0].lower()
+        if fw not in first_words:
+            first_words[fw] = (name, name_to_crs[name])
+
+    fw_matches = difflib.get_close_matches(
+        query.lower(), list(first_words.keys()), n=1, cutoff=0.6
+    )
+    if fw_matches:
+        return first_words[fw_matches[0]]
+
+    return None, None
+
+
 def resolve_london(station_name: str, intent: str = None) -> tuple:
     """
     'London' is ambiguous — map it to the most likely station
