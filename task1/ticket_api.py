@@ -116,12 +116,26 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 
 
 def _ojp_url(origin_crs, destination_crs, iso_datetime):
-    """Build the correct OJP times-and-fares URL."""
-    date_compact = iso_datetime[:10].replace("-", "")  # "20260715"
-    time_compact = iso_datetime[11:16].replace(":", "")  # "0900"
+    """
+    Build a pre-filled National Rail journey planner URL.
+    Date format: DDMMYY (e.g. 8 May 2026 → 080526)
+    """
+    try:
+        from datetime import datetime as _dt
+        parsed = _dt.strptime(iso_datetime[:19], "%Y-%m-%dT%H:%M:%S")
+        leaving_date = parsed.strftime("%d%m%y")   # "080526"
+        leaving_hour = parsed.strftime("%H")        # "09"
+        leaving_min  = parsed.strftime("%M")        # "00"
+    except Exception:
+        leaving_date = "010126"
+        leaving_hour = "09"
+        leaving_min  = "00"
     return (
-        f"https://ojp.nationalrail.co.uk/service/timesandfares"
-        f"/{origin_crs}/{destination_crs}/{date_compact}/{time_compact}/dep"
+        f"https://www.nationalrail.co.uk/journey-planner/"
+        f"?origin={origin_crs}&destination={destination_crs}"
+        f"&leavingType=departing&leavingDate={leaving_date}"
+        f"&leavingHour={leaving_hour}&leavingMin={leaving_min}"
+        f"&adults=1&children=0&railcards=&class=S&type=S"
     )
 
 

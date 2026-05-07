@@ -499,16 +499,20 @@ def process_message(user_input: str) -> str:
         st.session_state.collected = {
             k: None for k in c}
         if result["found"]:
+            # Format stored ISO date for display
+            try:
+                _travel_dt = datetime.strptime(travel_iso[:10], "%Y-%m-%d")
+                display_date = _travel_dt.strftime("%-d %B %Y")
+            except Exception:
+                display_date = c['date']
             return (
                 f"Great news! The cheapest ticket from "
-                f"{c['origin']} to {c['destination']} "
-                f"on {c['date']} is **{result['price']}** "
+                f"**{c['origin']}** to **{c['destination']}** "
+                f"on **{display_date}** is **{result['price']}** "
                 f"({result['ticket_type']}).\n\n"
-                f"🕐 Departs: "
-                f"{result['departure'][:16].replace('T',' ')}\n"
-                f"🏁 Arrives: "
-                f"{result['arrival'][:16].replace('T',' ')}\n\n"
-                f"[Book here]({result['booking_url']})"
+                f"🕐 Departs: {result['departure'][:16].replace('T',' ')}\n"
+                f"🏁 Arrives: {result['arrival'][:16].replace('T',' ')}\n\n"
+                f"[Book here →]({result['booking_url']})"
             )
         error_msg = result.get("error", "No fares available")
         if "timed out" in error_msg.lower():
