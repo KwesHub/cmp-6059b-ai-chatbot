@@ -4,7 +4,6 @@ from datetime import datetime
 from database import get_connection, initialise_database
 from nlp.intent import get_intent
 from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london
-from engine.engine import run_engine
 from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
 from engine.knowledge_base import get_kb
 
