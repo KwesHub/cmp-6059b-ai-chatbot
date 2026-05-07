@@ -1,5 +1,5 @@
 import spacy
-from config import SPACY_MODEL, INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_UNKNOWN
+from config import SPACY_MODEL, INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
 
 # ─── Load spaCy model ────────────────────────────────────
 nlp = spacy.load(SPACY_MODEL)
@@ -7,9 +7,10 @@ nlp = spacy.load(SPACY_MODEL)
 
 def get_intent(user_input: str) -> str:
     """
-    Analyse the user's message and return one of three intents:
+    Analyse the user's message and return one of the intents:
     - INTENT_BOOK_TICKET    → user wants to find/book a train ticket
     - INTENT_PREDICT_DELAY  → user wants to predict a delay
+    - INTENT_ADD_RULE       → user wants to teach the bot a new rule
     - INTENT_UNKNOWN        → couldn't work it out
     """
     doc = nlp(user_input.lower())
@@ -23,6 +24,18 @@ def get_intent(user_input: str) -> str:
             root = token.lemma_
         if token.dep_ == "dobj":
             dobj = token.lemma_
+
+    # ─── Keyword matching for add_rule intent ────────────
+    ka_verbs = {"add", "teach", "learn", "remember", "save", "store", "create"}
+    ka_nouns = {"rule", "fact", "knowledge", "answer", "response", "information"}
+
+    all_words = {token.lemma_ for token in doc}
+
+    if (root in ka_verbs and all_words & ka_nouns) or \
+       ("add" in all_words and "rule" in all_words) or \
+       ("teach" in all_words) or \
+       ("remember this" in user_input.lower()):
+        return INTENT_ADD_RULE
 
     # ─── Keyword matching for book_ticket intent ─────────
     ticket_verbs = {"find", "book", "buy", "get", "search", "check", "want", "need", "look", "help"}
@@ -40,8 +53,6 @@ def get_intent(user_input: str) -> str:
         return INTENT_PREDICT_DELAY
 
     # ─── Fallback: scan all tokens for keywords ───────────
-    all_words = {token.lemma_ for token in doc}
-
     if all_words & ticket_nouns:
         return INTENT_BOOK_TICKET
 

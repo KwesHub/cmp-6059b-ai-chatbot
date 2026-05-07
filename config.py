@@ -9,6 +9,7 @@ SPACY_MODEL = "en_core_web_sm"
 # ─── Intents ────────────────────────────────────────────
 INTENT_BOOK_TICKET = "book_ticket"
 INTENT_PREDICT_DELAY = "predict_delay"
+INTENT_ADD_RULE = "add_rule"
 INTENT_UNKNOWN = "unknown"
 
 # ─── Task 2 route ───────────────────────────────────────

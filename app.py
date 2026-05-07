@@ -5,7 +5,12 @@ from database import get_connection, initialise_database
 from nlp.intent import get_intent
 from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london
 from engine.engine import run_engine
+<<<<<<< Updated upstream
 from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_UNKNOWN
+=======
+from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
+from engine.knowledge_base import get_kb
+>>>>>>> Stashed changes
 
 st.set_page_config(
     page_title="Train Assistant",
@@ -51,6 +56,19 @@ if "collected" not in st.session_state:
         "planned_arrival": None,
         "day_of_week": None, "month": None,
     }
+<<<<<<< Updated upstream
+=======
+
+# ─── Knowledge Acquisition state ────────────────────────
+if "ka_category" not in st.session_state:
+    st.session_state.ka_category = None
+if "ka_question" not in st.session_state:
+    st.session_state.ka_question = None
+if "ka_keywords" not in st.session_state:
+    st.session_state.ka_keywords = None
+if "ka_answer" not in st.session_state:
+    st.session_state.ka_answer = None
+>>>>>>> Stashed changes
 
 
 def log_to_db(user_msg, bot_msg, intent=None):
@@ -140,6 +158,54 @@ def process_message(user_input: str) -> str:
         c["month"] = now.month
         st.session_state.stage = None
 
+<<<<<<< Updated upstream
+=======
+    # ─── KA stages ───────────────────────────────────────
+    elif stage == "ka_ask_category":
+        st.session_state.ka_category = user_input.strip().lower().replace(" ", "_")
+        st.session_state.stage = "ka_ask_question"
+        return "What is the question or trigger phrase?"
+
+    elif stage == "ka_ask_question":
+        st.session_state.ka_question = user_input.strip()
+        st.session_state.stage = "ka_ask_keywords"
+        return ("What keywords should trigger this answer? "
+                "Separate them with commas. For example: group ticket, bulk booking")
+
+    elif stage == "ka_ask_keywords":
+        st.session_state.ka_keywords = [
+            k.strip() for k in user_input.split(",") if k.strip()
+        ]
+        st.session_state.stage = "ka_ask_answer"
+        return "And what should the answer be?"
+
+    elif stage == "ka_ask_answer":
+        st.session_state.ka_answer = user_input.strip()
+        # Persist to KB
+        kb = get_kb()
+        kb.add_qa(
+            category=st.session_state.ka_category,
+            question=st.session_state.ka_question,
+            keywords=st.session_state.ka_keywords,
+            answer=st.session_state.ka_answer,
+        )
+        summary = (
+            f"✅ Learned! I've added this to the **{st.session_state.ka_category}** category:\n\n"
+            f"**Q:** {st.session_state.ka_question}\n"
+            f"**Keywords:** {', '.join(st.session_state.ka_keywords)}\n"
+            f"**A:** {st.session_state.ka_answer}\n\n"
+            "I'll use this to answer questions from now on."
+        )
+        # Reset KA state
+        st.session_state.ka_category = None
+        st.session_state.ka_question = None
+        st.session_state.ka_keywords = None
+        st.session_state.ka_answer = None
+        st.session_state.stage = None
+        st.session_state.intent = None
+        return summary
+
+>>>>>>> Stashed changes
     # ── Step 3: Decide what to ask or do next ────────────
     if intent == INTENT_BOOK_TICKET:
         if not c["origin"]:
@@ -234,12 +300,33 @@ def process_message(user_input: str) -> str:
             f"📊 Confidence: {confidence}"
         )
 
+<<<<<<< Updated upstream
     else:
         return (
             "I'm sorry, I didn't quite understand that. "
             "I can help you find a train ticket or predict "
             "your arrival time if your train is delayed. "
             "Which would you like help with?"
+=======
+    elif intent == INTENT_ADD_RULE:
+        st.session_state.stage = "ka_ask_category"
+        return ("Sure, I can learn something new! "
+                "What category should this go in? "
+                "For example: ticket_types, booking_policies, delays")
+
+    # ─── KB query fallback — check KB before giving up ───
+    kb = get_kb()
+    kb_result = kb.search_qa(user_input)
+    if kb_result:
+        return kb_result["answer"]
+
+    else:
+        return (
+            "I'm sorry, I didn't quite understand that. "
+            "I can help you find a train ticket, predict "
+            "your arrival time, or you can teach me something "
+            "new by saying 'add a rule'. Which would you like?"
+>>>>>>> Stashed changes
         )
 
 
