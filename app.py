@@ -5,12 +5,8 @@ from database import get_connection, initialise_database
 from nlp.intent import get_intent
 from nlp.entities import extract_entities, get_crs_code, find_stations_in_text, resolve_london
 from engine.engine import run_engine
-<<<<<<< Updated upstream
-from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_UNKNOWN
-=======
 from config import INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
 from engine.knowledge_base import get_kb
->>>>>>> Stashed changes
 
 st.set_page_config(
     page_title="Train Assistant",
@@ -56,8 +52,6 @@ if "collected" not in st.session_state:
         "planned_arrival": None,
         "day_of_week": None, "month": None,
     }
-<<<<<<< Updated upstream
-=======
 
 # ─── Knowledge Acquisition state ────────────────────────
 if "ka_category" not in st.session_state:
@@ -68,7 +62,6 @@ if "ka_keywords" not in st.session_state:
     st.session_state.ka_keywords = None
 if "ka_answer" not in st.session_state:
     st.session_state.ka_answer = None
->>>>>>> Stashed changes
 
 
 def log_to_db(user_msg, bot_msg, intent=None):
@@ -158,8 +151,6 @@ def process_message(user_input: str) -> str:
         c["month"] = now.month
         st.session_state.stage = None
 
-<<<<<<< Updated upstream
-=======
     # ─── KA stages ───────────────────────────────────────
     elif stage == "ka_ask_category":
         st.session_state.ka_category = user_input.strip().lower().replace(" ", "_")
@@ -205,7 +196,6 @@ def process_message(user_input: str) -> str:
         st.session_state.intent = None
         return summary
 
->>>>>>> Stashed changes
     # ── Step 3: Decide what to ask or do next ────────────
     if intent == INTENT_BOOK_TICKET:
         if not c["origin"]:
@@ -300,14 +290,6 @@ def process_message(user_input: str) -> str:
             f"📊 Confidence: {confidence}"
         )
 
-<<<<<<< Updated upstream
-    else:
-        return (
-            "I'm sorry, I didn't quite understand that. "
-            "I can help you find a train ticket or predict "
-            "your arrival time if your train is delayed. "
-            "Which would you like help with?"
-=======
     elif intent == INTENT_ADD_RULE:
         st.session_state.stage = "ka_ask_category"
         return ("Sure, I can learn something new! "
@@ -326,7 +308,6 @@ def process_message(user_input: str) -> str:
             "I can help you find a train ticket, predict "
             "your arrival time, or you can teach me something "
             "new by saying 'add a rule'. Which would you like?"
->>>>>>> Stashed changes
         )
 
 
@@ -335,7 +316,7 @@ st.title("🚂 Train Assistant Chatbot")
 st.caption(f"Session: {st.session_state.session_id[:8]}...")
 
 for msg in st.session_state.messages:
-    role = "assistant" if msg["role"] == "bot" else "user"
+    role = "assistant" if msg["role"] == "bot"  else "user"
     with st.chat_message(role):
         st.write(msg["content"])
 
