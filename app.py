@@ -48,8 +48,9 @@ if "collected" not in st.session_state:
         "origin": None, "destination": None,
         "origin_crs": None, "destination_crs": None,
         "date": None, "depart_time": None, "ticket_type": None,
+        "return_date": None, "return_time": None,
         "current_station": None, "current_station_crs": None,
-        "planned_arrival": None,
+        "planned_arrival": None, "delay_minutes": None,
         "day_of_week": None, "month": None,
     }
 
@@ -104,6 +105,11 @@ def resolve_station(text: str, intent: str):
     or (raw_text, None) when nothing found.
     """
     text = text.strip()
+
+    # 0. Handle "London" → route to correct terminus before fuzzy matching
+    london_name, london_crs = resolve_london(text, intent)
+    if london_crs:
+        return london_name, london_crs
 
     # 1. Try exact / substring match in DB
     stations = find_stations_in_text(text)
@@ -184,11 +190,15 @@ def process_message(user_input: str) -> str:
             "confirm_date": INTENT_BOOK_TICKET,
             "ask_time": INTENT_BOOK_TICKET,
             "ask_ticket_type": INTENT_BOOK_TICKET,
+            "ask_return_date": INTENT_BOOK_TICKET,
+            "confirm_return_date": INTENT_BOOK_TICKET,
+            "ask_return_time": INTENT_BOOK_TICKET,
             "disambiguate_station": None,  # handled by disambig_for context
             "confirm_typo": None,          # protected — user is answering yes/no
             "ask_current_station": INTENT_PREDICT_DELAY,
             "ask_delay_destination": INTENT_PREDICT_DELAY,
             "ask_planned_arrival": INTENT_PREDICT_DELAY,
+            "ask_delay_minutes": INTENT_PREDICT_DELAY,
             # ka_ask_* excluded — user types content, not intent
         }
         expected = stage_intent_map.get(stage)
@@ -369,9 +379,9 @@ def process_message(user_input: str) -> str:
     elif stage == "ask_time":
         import re as _re
         raw_time = user_input.strip().lower()
-        # "any", "skip", "no preference", blank → no time filter (default 09:00)
+        # "any", "skip", "no preference", blank → search from first train of the day
         if raw_time in ("any", "skip", "no", "none", "no preference", "doesn't matter", ""):
-            c["depart_time"] = "09:00"
+            c["depart_time"] = "any"
             st.session_state._confirm_prefix = "✅ Searching all day for the cheapest fare."
         else:
             # Try to extract HH:MM from input (e.g. "9pm", "14:30", "9 am")
@@ -389,6 +399,56 @@ def process_message(user_input: str) -> str:
             else:
                 c["depart_time"] = "09:00"
                 st.session_state._confirm_prefix = "✅ Couldn't parse that time — defaulting to 09:00."
+        st.session_state.stage = None
+
+    elif stage == "ask_return_date":
+        from task1.ticket_api import format_datetime
+        raw_input = user_input.strip()
+        parsed_iso = format_datetime(raw_input, hour=9)
+        try:
+            from datetime import datetime as _dt
+            parsed_dt = _dt.strptime(parsed_iso, "%Y-%m-%dT%H:%M:%S")
+            readable = parsed_dt.strftime("%-d %B %Y")
+        except Exception:
+            readable = raw_input
+        st.session_state.parsed_date = parsed_iso
+        st.session_state.stage = "confirm_return_date"
+        return f"Just to confirm — you'd like to return on **{readable}**. Is that right? (yes / no)"
+
+    elif stage == "confirm_return_date":
+        answer = user_input.strip().lower()
+        if answer in ("yes", "y", "yeah", "yep", "correct", "ok", "sure", "that's right", "thats right"):
+            c["return_date"] = st.session_state.parsed_date
+            st.session_state.parsed_date = None
+            st.session_state.stage = None
+            st.session_state._confirm_prefix = "✅ Return date confirmed."
+        else:
+            st.session_state.parsed_date = None
+            st.session_state.stage = "ask_return_date"
+            c["return_date"] = None
+            return "No problem — what date would you like to return?"
+
+    elif stage == "ask_return_time":
+        import re as _re
+        raw_time = user_input.strip().lower()
+        if raw_time in ("any", "skip", "no", "none", "no preference", "doesn't matter", ""):
+            c["return_time"] = "any"
+            st.session_state._confirm_prefix = "✅ Searching all day for cheapest return fare."
+        else:
+            match = _re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', raw_time)
+            if match:
+                hour = int(match.group(1))
+                minute = int(match.group(2) or 0)
+                meridiem = match.group(3)
+                if meridiem == "pm" and hour != 12:
+                    hour += 12
+                elif meridiem == "am" and hour == 12:
+                    hour = 0
+                c["return_time"] = f"{hour:02d}:{minute:02d}"
+                st.session_state._confirm_prefix = f"✅ Return time: **{c['return_time']}**."
+            else:
+                c["return_time"] = "14:00"
+                st.session_state._confirm_prefix = "✅ Couldn't parse that — defaulting to 14:00."
         st.session_state.stage = None
 
     elif stage == "ask_current_station":
@@ -439,6 +499,14 @@ def process_message(user_input: str) -> str:
         c["day_of_week"] = now.weekday()
         c["month"] = now.month
         st.session_state._confirm_prefix = f"✅ Scheduled arrival: **{c['planned_arrival']}**."
+        st.session_state.stage = None
+
+    elif stage == "ask_delay_minutes":
+        import re as _re
+        nums = _re.findall(r'\d+', user_input)
+        mins = int(nums[0]) if nums else 0
+        c["delay_minutes"] = mins
+        st.session_state._confirm_prefix = f"✅ Current delay: **{mins} minutes**."
         st.session_state.stage = None
 
     # ─── KA stages ───────────────────────────────────────
@@ -513,40 +581,112 @@ def process_message(user_input: str) -> str:
             return _reply("What time would you like to depart? "
                           "For example: 9am, 14:30. "
                           "Or type **any** to find the cheapest fare of the day.")
+        if c["ticket_type"] == "return" and not c["return_date"]:
+            st.session_state.stage = "ask_return_date"
+            return _reply("What date would you like to return?")
+        if c["ticket_type"] == "return" and c["return_time"] is None:
+            st.session_state.stage = "ask_return_time"
+            return _reply("What time would you like to depart on your return journey? "
+                          "Or type **any** for the cheapest return fare.")
 
         # All info collected — search for ticket
-        from task1.ticket_api import find_cheapest_ticket, format_datetime, _ojp_url
+        from task1.ticket_api import find_cheapest_ticket, format_datetime
         # Merge confirmed date with chosen departure time
         base_iso = c["date"] if "T" in str(c["date"]) else format_datetime(c["date"])
         depart_hhmm = c.get("depart_time") or "09:00"
-        travel_iso = base_iso[:10] + "T" + depart_hhmm + ":00"
-        result = find_cheapest_ticket(
-            origin_crs=c["origin_crs"] or "NRW",
-            destination_crs=c["destination_crs"] or "LST",
-            date_string=travel_iso,
-            return_date=travel_iso if c.get("ticket_type") == "return" else None
+        use_first_train = (depart_hhmm == "any")
+        # firstTrainOfDay → use 06:00 in the booking link (reasonable morning time)
+        link_hhmm = "06:00" if use_first_train else depart_hhmm
+        travel_iso = base_iso[:10] + "T" + ("00:00" if use_first_train else depart_hhmm) + ":00"
+        link_iso   = base_iso[:10] + "T" + link_hhmm + ":00"
+        from task1.ticket_api import _nr_booking_url
+        _ticket_type = c.get("ticket_type") or "single"
+        _origin_crs  = c["origin_crs"] or "NRW"
+        _dest_crs    = c["destination_crs"] or "LST"
+        # Pre-build the booking URL with a sensible time (not 00:00)
+        override_url = _nr_booking_url(
+            _origin_crs, _dest_crs, link_iso, _ticket_type,
+            origin_name=c.get("origin"),
+            destination_name=c.get("destination")
         )
+        # Build return datetime if needed
+        if _ticket_type == "return" and c.get("return_date"):
+            ret_base = c["return_date"] if "T" in str(c["return_date"]) else format_datetime(c["return_date"])
+            ret_hhmm = c.get("return_time") or "14:00"
+            use_first_return = (ret_hhmm == "any")
+            return_iso = ret_base[:10] + "T" + ("00:00" if use_first_return else ret_hhmm) + ":00"
+        else:
+            return_iso = None
+
+        result = find_cheapest_ticket(
+            origin_crs=_origin_crs,
+            destination_crs=_dest_crs,
+            date_string=travel_iso,
+            return_date=return_iso,
+            origin_name=c.get("origin"),
+            destination_name=c.get("destination"),
+            ticket_type=_ticket_type,
+            use_first_train=use_first_train
+        )
+        # Always use the pre-built URL (correct CRS, sensible time)
+        result["booking_url"] = override_url
+        # Consume any pending confirmation prefix (e.g. "✅ Return time: 14:00.")
+        # so it appears above the fare result
+        pending_prefix = st.session_state.get("_confirm_prefix")
+        st.session_state._confirm_prefix = None
         # Reset for next conversation
         st.session_state.intent = None
         st.session_state.stage = None
         st.session_state.collected = {
             k: None for k in c}
         if result["found"]:
-            # Format stored ISO date for display
             try:
                 _travel_dt = datetime.strptime(travel_iso[:10], "%Y-%m-%d")
                 display_date = _travel_dt.strftime("%-d %B %Y")
             except Exception:
                 display_date = c['date']
-            return (
-                f"Great news! The cheapest ticket from "
-                f"**{c['origin']}** to **{c['destination']}** "
-                f"on **{display_date}** is **{result['price']}** "
-                f"({result['ticket_type']}).\n\n"
-                f"🕐 Departs: {result['departure'][:16].replace('T',' ')}\n"
-                f"🏁 Arrives: {result['arrival'][:16].replace('T',' ')}\n\n"
-                f"[Book here →]({result['booking_url']})"
-            )
+            depart_time = result['departure'][:16].replace('T', ' ')
+            arrive_time = result['arrival'][:16].replace('T', ' ')
+
+            if _ticket_type == "return" and c.get("return_date"):
+                # Show outward + return breakdown
+                try:
+                    _ret_dt = datetime.strptime(return_iso[:10], "%Y-%m-%d")
+                    display_return_date = _ret_dt.strftime("%-d %B %Y")
+                except Exception:
+                    display_return_date = c.get("return_date", "")
+                ret_depart = result.get("return_departure", "N/A")[:16].replace('T', ' ')
+                ret_arrive  = result.get("return_arrival",  "N/A")[:16].replace('T', ' ')
+                out_price = result.get("outward_price", "?")
+                in_price  = result.get("inward_price", "?")
+                msg = (
+                    f"Great news! Here are the cheapest fares for your return trip "
+                    f"**{c['origin']}** ↔ **{c['destination']}**:\n\n"
+                    f"**Outward** ({display_date}): **{out_price}** ({result['ticket_type'].split(' + ')[0]})\n"
+                    f"🕐 Departs: {depart_time} → Arrives: {arrive_time}\n\n"
+                    f"**Return** ({display_return_date}): **{in_price}** ({result['ticket_type'].split(' + ')[-1]})\n"
+                    f"🕐 Departs: {ret_depart} → Arrives: {ret_arrive}\n\n"
+                    f"**Total: {result['price']}**\n\n"
+                    f"[Book on National Rail →]({result['booking_url']})\n\n"
+                    f"*Search outward:* **{c['origin']}** → **{c['destination']}**, "
+                    f"**{display_date}**\n"
+                    f"*Search return:* **{c['destination']}** → **{c['origin']}**, "
+                    f"**{display_return_date}**"
+                )
+            else:
+                msg = (
+                    f"Great news! The cheapest ticket from "
+                    f"**{c['origin']}** to **{c['destination']}** "
+                    f"on **{display_date}** is **{result['price']}** "
+                    f"({result['ticket_type']}).\n\n"
+                    f"🕐 Departs: {depart_time}\n"
+                    f"🏁 Arrives: {arrive_time}\n\n"
+                    f"[Book on National Rail →]({result['booking_url']})\n\n"
+                    f"*On the booking page, search:* "
+                    f"**{c['origin']}** → **{c['destination']}**, "
+                    f"**{display_date}**, **{depart_time[-5:]}**"
+                )
+            return f"{pending_prefix}\n\n{msg}" if pending_prefix else msg
         error_msg = result.get("error", "No fares available")
         if "timed out" in error_msg.lower():
             reason = "The National Rail API timed out."
@@ -572,8 +712,12 @@ def process_message(user_input: str) -> str:
             return _reply("And where are you heading to?")
         if not c["planned_arrival"]:
             st.session_state.stage = "ask_planned_arrival"
-            return _reply("What was the originally scheduled arrival time? "
+            return _reply("What is the scheduled arrival time at your destination? "
                           "For example: 11:30.")
+        if c["delay_minutes"] is None:
+            st.session_state.stage = "ask_delay_minutes"
+            return _reply("How many minutes has the train been delayed so far? "
+                          "For example: 10.")
 
         # All info collected — predict delay
         from task2.predict import predict_delay
@@ -586,16 +730,23 @@ def process_message(user_input: str) -> str:
             day_of_week=c["day_of_week"] or 0,
             month=c["month"] or 7
         )
-        delay = result["predicted_delay_minutes"]
+        # The model predicts total delay at destination.
+        # We also show the current known delay for context.
+        current_delay = c["delay_minutes"] or 0
+        predicted_delay = result["predicted_delay_minutes"]
         arrival = result["predicted_arrival"]
         confidence = result["confidence"]
 
-        if delay > 0:
-            delay_text = f"approximately {abs(delay):.0f} minutes late"
-        elif delay < 0:
-            delay_text = f"approximately {abs(delay):.0f} minutes early"
+        def _mins(n):
+            n = int(round(abs(n)))
+            return f"{n} minute" if n == 1 else f"{n} minutes"
+
+        if predicted_delay > 0:
+            delay_text = f"approximately **{_mins(predicted_delay)} late**"
+        elif predicted_delay < 0:
+            delay_text = f"approximately **{_mins(predicted_delay)} early**"
         else:
-            delay_text = "on time"
+            delay_text = "**on time**"
 
         # Reset
         st.session_state.intent = None
@@ -603,8 +754,10 @@ def process_message(user_input: str) -> str:
         st.session_state.collected = {k: None for k in c}
 
         return (
-            f"Based on historical data, your train is predicted "
-            f"to arrive at {c['destination']} **{delay_text}**.\n\n"
+            f"Your train is currently **{current_delay} minutes delayed** "
+            f"at {c['current_station']}.\n\n"
+            f"Based on historical data for this route, your train is predicted "
+            f"to arrive at {c['destination']} {delay_text}.\n\n"
             f"🕐 Estimated arrival: **{arrival}**\n"
             f"📊 Confidence: {confidence}"
         )

@@ -8,6 +8,7 @@ load_dotenv()
 USERNAME = os.getenv("NATIONAL_RAIL_USERNAME")
 PASSWORD = os.getenv("NATIONAL_RAIL_PASSWORD")
 
+# WSDL declares http:// — the API may redirect HTTPS → HTTP or require HTTP directly
 SOAP_URL = "https://ojp.nationalrail.co.uk/webservices"
 
 
@@ -71,7 +72,21 @@ def format_datetime(date_string: str, hour: int = 9) -> str:
 
 
 def build_soap_request(origin_crs, destination_crs, depart_datetime,
-                       is_return=False, return_datetime=None):
+                       is_return=False, return_datetime=None,
+                       use_first_train=False):
+    """
+    use_first_train=True sends firstTrainOfDay instead of departBy,
+    causing the API to search from the very first service of the day —
+    useful when the user says "any time" (finds cheapest all-day fare).
+    """
+    # Extract just the date portion for firstTrainOfDay (xsd:date, not xsd:dateTime)
+    date_only = depart_datetime[:10]  # "2026-07-15"
+
+    if use_first_train:
+        outward_xml = f"<ns:firstTrainOfDay>{date_only}</ns:firstTrainOfDay>"
+    else:
+        outward_xml = f"<ns:departBy>{depart_datetime}</ns:departBy>"
+
     return_xml = ""
     if is_return and return_datetime:
         return_xml = f"""
@@ -95,7 +110,7 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
             </ns:destination>
             <ns:realtimeEnquiry>STANDARD</ns:realtimeEnquiry>
             <ns:outwardTime>
-                <ns:departBy>{depart_datetime}</ns:departBy>
+                {outward_xml}
             </ns:outwardTime>{return_xml}
             <ns:directTrains>false</ns:directTrains>
             <ns:fareRequestDetails>
@@ -115,29 +130,68 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 </soapenv:Envelope>"""
 
 
-def _ojp_url(origin_crs, destination_crs, iso_datetime, ticket_type="single"):
+def _nr_booking_url(origin_crs, destination_crs, iso_datetime,
+                    ticket_type="single",
+                    origin_name=None, destination_name=None):
     """
-    Build a pre-filled Trainline booking URL.
-    nationalrail.co.uk/journey-planner is a React SPA that ignores query params.
-    Trainline supports deep-linking and handles National Rail tickets.
+    Build a National Rail journey planner URL.
+    NR's React SPA (post-2024 redesign) does not support deep-linking for
+    station or date params — those are silently ignored. Only 'type' and
+    'adults' are reliably read. We pass those and link to the clean planner
+    page; the chat message already shows the full journey details.
     """
-    try:
-        from datetime import datetime as _dt
-        parsed = _dt.strptime(iso_datetime[:19], "%Y-%m-%dT%H:%M:%S")
-        # Trainline expects ISO 8601 date-time, URL-encoded
-        outward = parsed.strftime("%Y-%m-%dT%H:%M:%S")
-    except Exception:
-        outward = iso_datetime[:19] if iso_datetime else "2026-01-01T09:00:00"
-    return (
-        f"https://www.thetrainline.com/book/results"
-        f"?origin={origin_crs}&destination={destination_crs}"
-        f"&outwardDate={outward}&adults=1&children=0"
-        f"&directTrains=false"
-    )
+    # NR's React SPA (post-2024) ignores all deep-link params and triggers a
+    # blank search if ANY query params are present. Link to the bare planner.
+    return "https://www.nationalrail.co.uk/journey-planner/"
 
 
-def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
-    booking_url = _ojp_url(origin_crs, destination_crs, date)
+# Keep _ojp_url as an alias for backward compatibility
+def _ojp_url(origin_crs, destination_crs, iso_datetime,
+             ticket_type="single", origin_name=None, destination_name=None):
+    return _nr_booking_url(origin_crs, destination_crs, iso_datetime,
+                           ticket_type, origin_name, destination_name)
+
+
+def _find_text(elem, *tag_variants):
+    """
+    Try multiple namespace/tag combinations and return the first match's text.
+    Accepts tuples of (namespace, localname) or plain localname strings.
+    Also tries unqualified (no namespace) as final fallback.
+    """
+    NS_COM = "http://www.thalesgroup.com/ojp/common"
+    NS_JP  = "http://www.thalesgroup.com/ojp/jpservices"
+    for tag in tag_variants:
+        for ns in [NS_JP, NS_COM, ""]:
+            key = f"{{{ns}}}{tag}" if ns else tag
+            result = elem.findtext(f".//{key}")
+            if result is not None:
+                return result
+    return None
+
+
+def _find_elem(parent, tag):
+    """Find a child element trying NS_JP, NS_COM, and no namespace."""
+    NS_COM = "http://www.thalesgroup.com/ojp/common"
+    NS_JP  = "http://www.thalesgroup.com/ojp/jpservices"
+    for ns in [NS_JP, NS_COM, ""]:
+        key = f"{{{ns}}}{tag}" if ns else tag
+        el = parent.find(key)
+        if el is not None:
+            return el
+    return None
+
+
+_FARE_CATEGORY_LABELS = {
+    "ADVANCE":  "Advance",
+    "OFF-PEAK": "Off-Peak",
+    "ANYTIME":  "Anytime",
+}
+
+
+def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date,
+                        booking_url=None):
+    if not booking_url:
+        booking_url = _nr_booking_url(origin_crs, destination_crs, date)
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(xml_text)
@@ -145,54 +199,80 @@ def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
         NS_COM = "http://www.thalesgroup.com/ojp/common"
         NS_JP  = "http://www.thalesgroup.com/ojp/jpservices"
 
+        # Check API-level response code
         response_elem = root.find(f".//{{{NS_COM}}}response")
-        if response_elem is not None and response_elem.text != "Ok":
+        if response_elem is None:
+            response_elem = root.find(".//response")
+        if response_elem is not None and response_elem.text not in (None, "Ok"):
             return {
                 "found": False,
                 "error": f"API returned: {response_elem.text}",
                 "booking_url": booking_url
             }
 
-        cheapest_pence = float("inf")
-        cheapest = None
+        # Collect ALL (pence, departure, arrival, label) tuples
+        all_fares = []
 
-        for journey in root.findall(f".//{{{NS_JP}}}outwardJourney"):
-            # Get departure and arrival from timetable
-            depart = journey.findtext(
-                f".//{{{NS_JP}}}timetable/{{{NS_JP}}}scheduled/{{{NS_JP}}}departure",
-                "N/A")
-            arrive = journey.findtext(
-                f".//{{{NS_JP}}}timetable/{{{NS_JP}}}scheduled/{{{NS_JP}}}arrival",
-                "N/A")
+        # Try both NS_JP and no-namespace for outwardJourney
+        journeys = (root.findall(f".//{{{NS_JP}}}outwardJourney") or
+                    root.findall(".//outwardJourney"))
 
-            # Fares are under NS_JP not NS_COM
-            for fare in journey.findall(f".//{{{NS_JP}}}fare"):
-                price_elem = fare.find(f"{{{NS_JP}}}totalPrice")
-                desc_elem  = fare.find(f"{{{NS_JP}}}description")
+        for journey in journeys:
+            depart = _find_text(journey, "departure") or "N/A"
+            arrive = _find_text(journey, "arrival") or "N/A"
 
-                # Also try NS_COM if NS_JP doesn't work
-                if price_elem is None:
-                    price_elem = fare.find(f"{{{NS_COM}}}totalPrice")
-                    desc_elem  = fare.find(f"{{{NS_COM}}}description")
+            fares = (journey.findall(f".//{{{NS_JP}}}fare") or
+                     journey.findall(f".//{{{NS_COM}}}fare") or
+                     journey.findall(".//fare"))
+
+            for fare in fares:
+                price_elem = _find_elem(fare, "totalPrice")
+                desc_elem  = _find_elem(fare, "description")
+                cat_elem   = _find_elem(fare, "fareCategory")
 
                 if price_elem is not None and price_elem.text:
                     try:
                         pence = int(price_elem.text)
-                        if pence < cheapest_pence and pence > 0:
-                            cheapest_pence = pence
-                            cheapest = {
-                                "found": True,
-                                "price": f"£{pence/100:.2f}",
-                                "ticket_type": desc_elem.text if desc_elem is not None else "Standard",
-                                "departure": depart,
-                                "arrival": arrive,
-                                "booking_url": booking_url
-                            }
+                        if pence <= 0:
+                            continue
+                        if cat_elem is not None and cat_elem.text:
+                            label = _FARE_CATEGORY_LABELS.get(
+                                cat_elem.text.upper(), cat_elem.text.title()
+                            )
+                        elif desc_elem is not None and desc_elem.text:
+                            label = desc_elem.text
+                        else:
+                            label = "Standard"
+                        all_fares.append((pence, depart, arrive, label))
                     except (ValueError, TypeError):
                         continue
 
-        if cheapest:
-            return cheapest
+        if all_fares:
+            # Find the minimum price
+            min_pence = min(f[0] for f in all_fares)
+            # Among all fares at the minimum price, prefer departures at/after 06:00
+            cheapest_fares = [f for f in all_fares if f[0] == min_pence]
+            chosen = cheapest_fares[0]  # fallback: first (earliest)
+            for f in cheapest_fares:
+                depart_str = f[1]
+                try:
+                    # Parse departure time — it's an ISO datetime string
+                    depart_hour = int(depart_str[11:13])
+                    if depart_hour >= 6:
+                        chosen = f
+                        break
+                except Exception:
+                    pass
+
+            pence, depart, arrive, label = chosen
+            return {
+                "found": True,
+                "price": f"£{pence/100:.2f}",
+                "ticket_type": label,
+                "departure": depart,
+                "arrival": arrive,
+                "booking_url": booking_url
+            }
 
         return {
             "found": False,
@@ -210,45 +290,104 @@ def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date):
         }
 
 
+def _single_leg_search(origin_crs, destination_crs, travel_date,
+                        use_first_train=False, booking_url=None):
+    """Make one SOAP call and return parse_cheapest_fare result."""
+    soap_body = build_soap_request(
+        origin_crs=origin_crs,
+        destination_crs=destination_crs,
+        depart_datetime=travel_date,
+        is_return=False,
+        use_first_train=use_first_train
+    )
+    response = requests.post(
+        SOAP_URL,
+        data=soap_body,
+        auth=(USERNAME, PASSWORD),
+        headers={"Content-Type": "text/xml; charset=utf-8"},
+        timeout=15
+    )
+    if response.status_code != 200:
+        return {
+            "found": False,
+            "error": f"HTTP {response.status_code}: {response.text[:300]}",
+            "booking_url": booking_url
+        }
+    return parse_cheapest_fare(response.text, origin_crs,
+                               destination_crs, travel_date,
+                               booking_url=booking_url)
+
+
 def find_cheapest_ticket(origin_crs, destination_crs, date_string,
-                          time_string=None, return_date=None):
-    # If already ISO format (e.g. "2026-05-08T21:00:00"), use directly.
-    # Re-parsing with DATE_ORDER=DMY would swap day/month.
+                          time_string=None, return_date=None,
+                          origin_name=None, destination_name=None,
+                          ticket_type="single", use_first_train=False):
     import re as _re
     if _re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}', str(date_string)):
         travel_date = date_string
     else:
         travel_date = format_datetime(date_string, hour=9)
-    booking_url = _ojp_url(origin_crs, destination_crs, travel_date)
+
+    booking_url = _ojp_url(
+        origin_crs, destination_crs, travel_date,
+        ticket_type=ticket_type,
+        origin_name=origin_name,
+        destination_name=destination_name
+    )
+
     try:
-        is_return = return_date is not None
-        return_dt = format_datetime(return_date) if return_date else None
+        if ticket_type == "return" and return_date:
+            # Two separate single searches — outward leg + return leg
+            # Return leg goes in the opposite direction
+            import re as _re2
+            if _re2.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}', str(return_date)):
+                return_travel_date = return_date
+            else:
+                return_travel_date = format_datetime(return_date, hour=14)
 
-        soap_body = build_soap_request(
-            origin_crs=origin_crs,
-            destination_crs=destination_crs,
-            depart_datetime=travel_date,
-            is_return=is_return,
-            return_datetime=return_dt
-        )
+            use_first_return = return_travel_date.endswith("T00:00:00")
 
-        response = requests.post(
-            SOAP_URL,
-            data=soap_body,
-            auth=(USERNAME, PASSWORD),
-            headers={"Content-Type": "text/xml; charset=utf-8"},
-            timeout=15
-        )
+            outward = _single_leg_search(
+                origin_crs, destination_crs, travel_date,
+                use_first_train=use_first_train, booking_url=booking_url
+            )
+            inward = _single_leg_search(
+                destination_crs, origin_crs, return_travel_date,
+                use_first_train=use_first_return, booking_url=booking_url
+            )
 
-        if response.status_code != 200:
+            if not outward["found"] and not inward["found"]:
+                return {"found": False, "error": outward.get("error", "No fares found"),
+                        "booking_url": booking_url}
+
+            # Combine prices; fall back gracefully if one leg failed
+            out_pence = int(float(outward["price"].replace("£", "")) * 100) if outward["found"] else 0
+            in_pence  = int(float(inward["price"].replace("£", "")) * 100) if inward["found"] else 0
+            total_pence = out_pence + in_pence
+
+            out_label = outward.get("ticket_type", "Standard") if outward["found"] else "N/A"
+            in_label  = inward.get("ticket_type", "Standard") if inward["found"] else "N/A"
+            combined_label = out_label if out_label == in_label else f"{out_label} + {in_label}"
+
             return {
-                "found": False,
-                "error": f"HTTP {response.status_code}: {response.text[:300]}",
+                "found": True,
+                "price": f"£{total_pence/100:.2f}",
+                "ticket_type": combined_label,
+                "departure": outward.get("departure", "N/A") if outward["found"] else "N/A",
+                "arrival":   outward.get("arrival",   "N/A") if outward["found"] else "N/A",
+                "return_departure": inward.get("departure", "N/A") if inward["found"] else "N/A",
+                "return_arrival":   inward.get("arrival",   "N/A") if inward["found"] else "N/A",
+                "outward_price": f"£{out_pence/100:.2f}" if outward["found"] else "N/A",
+                "inward_price":  f"£{in_pence/100:.2f}"  if inward["found"] else "N/A",
                 "booking_url": booking_url
             }
 
-        return parse_cheapest_fare(response.text, origin_crs,
-                                    destination_crs, travel_date)
+        # Single ticket — one call
+        result = _single_leg_search(
+            origin_crs, destination_crs, travel_date,
+            use_first_train=use_first_train, booking_url=booking_url
+        )
+        return result
 
     except requests.exceptions.Timeout:
         return {
@@ -266,7 +405,9 @@ def find_cheapest_ticket(origin_crs, destination_crs, date_string,
 
 if __name__ == "__main__":
     print("Test 1: Norwich to London Liverpool Street, 15th July")
-    result = find_cheapest_ticket("NRW", "LST", "15th July")
+    result = find_cheapest_ticket("NRW", "LST", "15th July",
+                                   origin_name="Norwich",
+                                   destination_name="London Liverpool Street")
     print(f"Found:   {result['found']}")
     if result["found"]:
         print(f"Price:   {result['price']}")
@@ -278,3 +419,17 @@ if __name__ == "__main__":
         if 'raw_snippet' in result:
             print(f"XML:     {result['raw_snippet']}")
     print(f"Book:    {result['booking_url']}")
+
+    print("\nTest 2: firstTrainOfDay (any time)")
+    result2 = find_cheapest_ticket("NRW", "LST", "15th July",
+                                    origin_name="Norwich",
+                                    destination_name="London Liverpool Street",
+                                    use_first_train=True)
+    print(f"Found:   {result2['found']}")
+    if result2["found"]:
+        print(f"Price:   {result2['price']}")
+        print(f"Type:    {result2['ticket_type']}")
+    else:
+        print(f"Error:   {result2.get('error')}")
+        if 'raw_snippet' in result2:
+            print(f"XML:     {result2['raw_snippet']}")

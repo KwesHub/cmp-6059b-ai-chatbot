@@ -48,12 +48,16 @@ def find_stations_in_text(user_input: str) -> list:
             return [(station_name, crs_code)]
 
     # Pass 2: station name is a substring of the user's text (sentence input)
+    # Use word-boundary match to prevent "Iver" matching inside "liverpool" etc.
+    import re as _re
     found = []
     for station_name, crs_code in all_stations:
         if not _is_likely_rail_station(station_name):
             continue
         station_lower = station_name.lower()
-        if station_lower in text_lower and station_lower != text_lower:
+        if station_lower != text_lower and _re.search(
+            r'\b' + _re.escape(station_lower) + r'\b', text_lower
+        ):
             pos = text_lower.index(station_lower)
             found.append((pos, station_name, crs_code))
 
@@ -177,15 +181,28 @@ def find_station_by_typo(query: str) -> tuple:
 def resolve_london(station_name: str, intent: str = None) -> tuple:
     """
     'London' is ambiguous — map it to the most likely station
-    based on context. Default to London Waterloo for delay
-    prediction (SWR route) and London Liverpool Street for
-    ticket searches (Greater Anglia route from Norwich).
+    based on context. Also handles common Waterloo/Liverpool St
+    variants whose names are reversed in the station DB.
     """
-    if station_name.lower() == "london":
+    sl = station_name.strip().lower()
+
+    # Explicit Waterloo variants
+    if sl in ("london waterloo", "waterloo", "london waterloo station",
+              "waterloo london", "wat"):
+        return ("London Waterloo", "WAT")
+
+    # Explicit Liverpool Street variants
+    if sl in ("london liverpool street", "liverpool street",
+              "liverpool st", "london liverpool st", "lst"):
+        return ("London Liverpool Street", "LST")
+
+    # Bare "london" — route by intent
+    if sl == "london":
         if intent == INTENT_PREDICT_DELAY:
-            return ("London Waterloo", "WAT")
+            return ("Waterloo London", "WAT")
         else:
             return ("London Liverpool Street", "LST")
+
     return (station_name, None)
 # ─── Main entity extractor ───────────────────────────────
 def extract_entities(user_input: str, intent: str = None) -> dict:
