@@ -1,4 +1,5 @@
 import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore")
@@ -9,6 +10,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from keras_model import build_keras_model
 
 DATA_DIR  = "data"
 MODEL_DIR = "models"
@@ -80,6 +82,52 @@ def train():
             best_rmse  = metrics["RMSE"]
             best_model = model
             best_name  = name
+
+    ## Keras MLP model
+
+    print("\nTraining Keras MLP model...")
+
+    # building the model
+    mlp = build_keras_model(X_train.shape[1])
+
+    # training the model using the data
+    history = mlp.fit(X_train,y_train, validation_split=0.2, epochs=5, batch_size=32, verbose=1)
+
+    # Asking the model to make a prediction
+    mlp_preds = mlp.predict(X_test).flatten()
+    # Checking how accurate the prediction is 
+    mlp_rmse = math.sqrt(mean_squared_error(y_test, mlp_preds))
+    mlp_mae = mean_absolute_error(y_test, mlp_preds)
+    mlp_r2 = r2_score(y_test, mlp_preds)
+
+    # Results
+    print(f"Keras MLP " f"RMSE={mlp_rmse:.2f}" f"MAE{mlp_mae:.2f}" f"R2={mlp_r2:.3f}")
+
+    #Adds results to the comparision table
+    results.append({"Model": "Keras MLP", "RMSE": round(mlp_rmse, 2), "MAE": round(mlp_mae, 2), "R2": round(mlp_r2, 3)})
+
+    # Saves the model
+    Keras_path = os.path.join(MODEL_DIR, "keras_mlp.h5")
+    mlp.save(Keras_path)
+
+    print(f"Saved keras MLP model to {Keras_path}")
+
+    # Plotting a graph to show models improvement
+    plt.plot(history.history["loss"])
+    plt.plot(history.history["val_loss"])
+    plt.legend(["train", "validation"])
+    plt.title("MLP Loss")
+    loss_path = os.path.join(DATA_DIR, "mlp_loss.png")
+    plt.savefig(loss_path)
+    plt.close()
+
+    print(f"Saved MLP loss curve to {loss_path}")
+
+    # if Keras MLP is the best model
+    if mlp_rmse < best_rmse:
+        best_rmse = mlp_rmse
+        best_model = mlp
+        best_name = "Keras MLP"
 
     # ─── Save comparison table ────────────────────────────
     results_df = pd.DataFrame(results)
