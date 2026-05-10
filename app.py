@@ -63,6 +63,8 @@ if "typo_stage_return" not in st.session_state:
     st.session_state.typo_stage_return = None # stage to resume after typo confirm
 if "parsed_date" not in st.session_state:
     st.session_state.parsed_date = None       # ISO date string pending confirmation
+if "parsed_date_has_time" not in st.session_state:
+    st.session_state.parsed_date_has_time = False  # True if user included a time in the date input
 
 # ─── Disambiguation state ────────────────────────────────
 if "disambig_options" not in st.session_state:
@@ -301,12 +303,23 @@ def process_message(user_input: str) -> str:
         answer = user_input.strip().lower()
         if answer in ("yes", "y", "yeah", "yep", "correct", "ok", "sure", "that's right", "thats right"):
             c["date"] = st.session_state.parsed_date
+            # if the user included a time in their date input (e.g. "tomorrow 9pm"),
+            # store it as the departure time so we don't ask again unnecessarily
+            if st.session_state.get("parsed_date_has_time"):
+                try:
+                    from datetime import datetime as _dt
+                    parsed_dt = _dt.strptime(c["date"], "%Y-%m-%dT%H:%M:%S")
+                    c["depart_time"] = f"{parsed_dt.hour:02d}:{parsed_dt.minute:02d}"
+                except Exception:
+                    pass
             st.session_state.parsed_date = None
+            st.session_state.parsed_date_has_time = False
             st.session_state.stage = None
-            st.session_state._confirm_prefix = f"✅ Travel date confirmed."
+            st.session_state._confirm_prefix = "✅ Travel date confirmed."
         else:
             # They said no or typed a correction — treat as new date
             st.session_state.parsed_date = None
+            st.session_state.parsed_date_has_time = False
             st.session_state.stage = "ask_date"
             c["date"] = None
             return "No problem — what date would you like to travel? For example: 15th July or tomorrow."
@@ -355,18 +368,23 @@ def process_message(user_input: str) -> str:
 
     elif stage == "ask_date":
         from task1.ticket_api import format_datetime
+        import re as _re_date
         raw_input = user_input.strip()
         parsed_iso = format_datetime(raw_input, hour=9)
-        # Show the parsed date in readable format and ask to confirm
+        # detect whether the user included an explicit time (e.g. "tomorrow 9pm")
+        has_explicit_time = bool(_re_date.search(
+            r'\d+:\d+|\d+\s*(am|pm)', raw_input, _re_date.IGNORECASE
+        ))
         try:
             from datetime import datetime as _dt
             parsed_dt = _dt.strptime(parsed_iso, "%Y-%m-%dT%H:%M:%S")
-            readable = parsed_dt.strftime("%-d %B %Y")  # e.g. "8 May 2026"
-            if parsed_dt.hour != 9 or parsed_dt.minute != 0:
+            readable = parsed_dt.strftime("%-d %B %Y")
+            if has_explicit_time:
                 readable += parsed_dt.strftime(" at %H:%M")
         except Exception:
             readable = raw_input
         st.session_state.parsed_date = parsed_iso
+        st.session_state.parsed_date_has_time = has_explicit_time
         st.session_state.stage = "confirm_date"
         return f"Just to confirm — you'd like to travel on **{readable}**. Is that right? (yes / no)"
 
