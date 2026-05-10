@@ -125,20 +125,38 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
 
 def _nr_booking_url(origin_crs, destination_crs, iso_datetime,
                     ticket_type="single",
-                    origin_name=None, destination_name=None):
+                    origin_name=None, destination_name=None,
+                    return_datetime=None):
     """
-    Return a link to the National Rail journey planner.
-    NR's post-2024 React SPA ignores all query params (station, date, etc.)
-    so we link to the bare planner and show the journey details in chat instead.
+    Build a deep-link to the National Rail OJP timesandfares service.
+    Format: /service/timesandfares/{ORIGIN}/{DEST}/{DDMMYY}/{HHMM}/dep
+    For returns a second leg is appended: /{RETURN_DDMMYY}/{RETURN_HHMM}/dep
     """
-    return "https://www.nationalrail.co.uk/journey-planner/"
+    try:
+        dt = datetime.strptime(iso_datetime[:16], "%Y-%m-%dT%H:%M")
+        date_str = dt.strftime("%d%m%y")   # e.g. 110526 for 11 May 2026
+        time_str = dt.strftime("%H%M")     # e.g. 0900
+        url = (
+            f"https://ojp.nationalrail.co.uk/service/timesandfares"
+            f"/{origin_crs}/{destination_crs}/{date_str}/{time_str}/dep"
+        )
+        if ticket_type == "return" and return_datetime:
+            ret_dt = datetime.strptime(return_datetime[:16], "%Y-%m-%dT%H:%M")
+            ret_date = ret_dt.strftime("%d%m%y")
+            ret_time = ret_dt.strftime("%H%M")
+            url += f"/{ret_date}/{ret_time}/dep"
+        return url
+    except Exception:
+        return "https://ojp.nationalrail.co.uk/service/timesandfares/"
 
 
 # Keep _ojp_url as an alias for backward compatibility
 def _ojp_url(origin_crs, destination_crs, iso_datetime,
-             ticket_type="single", origin_name=None, destination_name=None):
+             ticket_type="single", origin_name=None, destination_name=None,
+             return_datetime=None):
     return _nr_booking_url(origin_crs, destination_crs, iso_datetime,
-                           ticket_type, origin_name, destination_name)
+                           ticket_type, origin_name, destination_name,
+                           return_datetime=return_datetime)
 
 
 def _find_text(elem, *tag_variants):
@@ -313,11 +331,14 @@ def find_cheapest_ticket(origin_crs, destination_crs, date_string,
     else:
         travel_date = format_datetime(date_string, hour=9)
 
+    # build the deep-link URL now; return_date is passed through so the return leg
+    # date/time appears in the URL for return tickets
     booking_url = _ojp_url(
         origin_crs, destination_crs, travel_date,
         ticket_type=ticket_type,
         origin_name=origin_name,
-        destination_name=destination_name
+        destination_name=destination_name,
+        return_datetime=return_date if ticket_type == "return" else None
     )
 
     try:

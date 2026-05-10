@@ -390,7 +390,7 @@ def process_message(user_input: str) -> str:
                 hour = int(match.group(1))
                 minute = int(match.group(2) or 0)
                 meridiem = match.group(3)
-                if meridiem == "pm" and hour != 12:
+                if meridiem == "pm" and hour < 12:
                     hour += 12
                 elif meridiem == "am" and hour == 12:
                     hour = 0
@@ -440,7 +440,7 @@ def process_message(user_input: str) -> str:
                 hour = int(match.group(1))
                 minute = int(match.group(2) or 0)
                 meridiem = match.group(3)
-                if meridiem == "pm" and hour != 12:
+                if meridiem == "pm" and hour < 12:
                     hour += 12
                 elif meridiem == "am" and hour == 12:
                     hour = 0
@@ -590,33 +590,37 @@ def process_message(user_input: str) -> str:
                           "Or type **any** for the cheapest return fare.")
 
         # All info collected — search for ticket
-        from task1.ticket_api import find_cheapest_ticket, format_datetime
+        from task1.ticket_api import find_cheapest_ticket, format_datetime, _nr_booking_url
         # Merge confirmed date with chosen departure time
         base_iso = c["date"] if "T" in str(c["date"]) else format_datetime(c["date"])
         depart_hhmm = c.get("depart_time") or "09:00"
         use_first_train = (depart_hhmm == "any")
-        # firstTrainOfDay → use 06:00 in the booking link (reasonable morning time)
         link_hhmm = "06:00" if use_first_train else depart_hhmm
         travel_iso = base_iso[:10] + "T" + ("00:00" if use_first_train else depart_hhmm) + ":00"
         link_iso   = base_iso[:10] + "T" + link_hhmm + ":00"
-        from task1.ticket_api import _nr_booking_url
         _ticket_type = c.get("ticket_type") or "single"
         _origin_crs  = c["origin_crs"] or "NRW"
         _dest_crs    = c["destination_crs"] or "LST"
-        # Pre-build the booking URL with a sensible time (not 00:00)
-        override_url = _nr_booking_url(
-            _origin_crs, _dest_crs, link_iso, _ticket_type,
-            origin_name=c.get("origin"),
-            destination_name=c.get("destination")
-        )
-        # Build return datetime if needed
+
+        # Build return datetime first so it can be included in the booking URL
         if _ticket_type == "return" and c.get("return_date"):
             ret_base = c["return_date"] if "T" in str(c["return_date"]) else format_datetime(c["return_date"])
             ret_hhmm = c.get("return_time") or "14:00"
             use_first_return = (ret_hhmm == "any")
+            ret_link_hhmm = "14:00" if use_first_return else ret_hhmm
             return_iso = ret_base[:10] + "T" + ("00:00" if use_first_return else ret_hhmm) + ":00"
+            return_link_iso = ret_base[:10] + "T" + ret_link_hhmm + ":00"
         else:
             return_iso = None
+            return_link_iso = None
+
+        # Build deep-link URL including return leg date/time if applicable
+        override_url = _nr_booking_url(
+            _origin_crs, _dest_crs, link_iso, _ticket_type,
+            origin_name=c.get("origin"),
+            destination_name=c.get("destination"),
+            return_datetime=return_link_iso
+        )
 
         result = find_cheapest_ticket(
             origin_crs=_origin_crs,
