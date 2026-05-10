@@ -14,25 +14,19 @@ from config import (
 from engine.rules import TrainBotRules
 
 
-def run_engine(intent: str, entities: dict,
-               extra_facts: dict = None) -> str:
+def run_engine(intent: str, entities: dict, extra_facts: dict = None) -> str:
     """
-    Run the experta engine with what we know and
-    return the bot's next response.
-
-    Args:
-        intent      : book_ticket / predict_delay / unknown
-        entities    : dict from extract_entities()
-        extra_facts : additional facts collected across turns
-                      e.g. ticket_type, current_station
+    Fire the experta rule engine with the current intent and known facts.
+    experta uses forward-chaining: it matches declared facts against rules
+    and fires the first rule whose conditions are satisfied.
     """
     engine = TrainBotRules()
     engine.reset()
 
-    # Declare intent
+    # declare intent as a fact so the rules can match on it
     engine.declare(Fact(intent=intent))
 
-    # Declare entity facts if we have them
+    # declare entity facts -- each one can trigger different rules
     if entities.get("origin"):
         engine.declare(Fact(origin=entities["origin"]))
     if entities.get("destination"):
@@ -46,7 +40,7 @@ def run_engine(intent: str, entities: dict,
     if entities.get("time"):
         engine.declare(Fact(time=entities["time"]))
 
-    # Declare any extra facts from previous turns
+    # declare any facts collected across previous turns in the conversation
     if extra_facts:
         for key, value in extra_facts.items():
             if value is not None:
@@ -56,25 +50,23 @@ def run_engine(intent: str, entities: dict,
     return engine.get_response()
 
 
-# ─── Manual test ─────────────────────────────────────────
 if __name__ == "__main__":
-    print("Test 1: book_ticket — no info yet")
+    print("Test 1: book_ticket -- no info yet")
     r = run_engine(INTENT_BOOK_TICKET, {})
     print(f"Bot: {r}\n")
 
-    print("Test 2: book_ticket — has origin only")
-    r = run_engine(INTENT_BOOK_TICKET, {"origin": "Norwich",
-                                         "origin_crs": "NRW"})
+    print("Test 2: book_ticket -- has origin only")
+    r = run_engine(INTENT_BOOK_TICKET, {"origin": "Norwich", "origin_crs": "NRW"})
     print(f"Bot: {r}\n")
 
-    print("Test 3: book_ticket — has origin and destination")
+    print("Test 3: book_ticket -- has origin and destination")
     r = run_engine(INTENT_BOOK_TICKET, {
         "origin": "Norwich", "origin_crs": "NRW",
         "destination": "London Liverpool Street", "destination_crs": "LST"
     })
     print(f"Bot: {r}\n")
 
-    print("Test 4: predict_delay — no info yet")
+    print("Test 4: predict_delay -- no info yet")
     r = run_engine(INTENT_PREDICT_DELAY, {})
     print(f"Bot: {r}\n")
 

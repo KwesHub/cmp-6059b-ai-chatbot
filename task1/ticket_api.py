@@ -3,22 +3,15 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime
 
-# ─── Load credentials ────────────────────────────────────
 load_dotenv()
 USERNAME = os.getenv("NATIONAL_RAIL_USERNAME")
 PASSWORD = os.getenv("NATIONAL_RAIL_PASSWORD")
 
-# WSDL declares http:// — the API may redirect HTTPS → HTTP or require HTTP directly
 SOAP_URL = "https://ojp.nationalrail.co.uk/webservices"
 
 
 def format_datetime(date_string: str, hour: int = 9) -> str:
-    """
-    Parse natural language date/time strings including:
-    - "tomorrow", "next Monday", "15th July", "2026-07-15"
-    - "tomorrow at 9pm", "Friday 18:30"
-    Returns ISO format "YYYY-MM-DDTHH:MM:SS".
-    """
+    """Parse natural language date strings like 'tomorrow', '15th July' into ISO format."""
     import re as _re
     import dateparser
 
@@ -75,9 +68,9 @@ def build_soap_request(origin_crs, destination_crs, depart_datetime,
                        is_return=False, return_datetime=None,
                        use_first_train=False):
     """
-    use_first_train=True sends firstTrainOfDay instead of departBy,
-    causing the API to search from the very first service of the day —
-    useful when the user says "any time" (finds cheapest all-day fare).
+    Build the SOAP XML request body for the National Rail OJP API.
+    use_first_train=True searches from the first service of the day,
+    which is useful when the user says "any time" and we want the cheapest fare.
     """
     # Extract just the date portion for firstTrainOfDay (xsd:date, not xsd:dateTime)
     date_only = depart_datetime[:10]  # "2026-07-15"
@@ -134,14 +127,10 @@ def _nr_booking_url(origin_crs, destination_crs, iso_datetime,
                     ticket_type="single",
                     origin_name=None, destination_name=None):
     """
-    Build a National Rail journey planner URL.
-    NR's React SPA (post-2024 redesign) does not support deep-linking for
-    station or date params — those are silently ignored. Only 'type' and
-    'adults' are reliably read. We pass those and link to the clean planner
-    page; the chat message already shows the full journey details.
+    Return a link to the National Rail journey planner.
+    NR's post-2024 React SPA ignores all query params (station, date, etc.)
+    so we link to the bare planner and show the journey details in chat instead.
     """
-    # NR's React SPA (post-2024) ignores all deep-link params and triggers a
-    # blank search if ANY query params are present. Link to the bare planner.
     return "https://www.nationalrail.co.uk/journey-planner/"
 
 
@@ -153,11 +142,7 @@ def _ojp_url(origin_crs, destination_crs, iso_datetime,
 
 
 def _find_text(elem, *tag_variants):
-    """
-    Try multiple namespace/tag combinations and return the first match's text.
-    Accepts tuples of (namespace, localname) or plain localname strings.
-    Also tries unqualified (no namespace) as final fallback.
-    """
+    """Try multiple XML namespace variants for a tag and return the first match's text."""
     NS_COM = "http://www.thalesgroup.com/ojp/common"
     NS_JP  = "http://www.thalesgroup.com/ojp/jpservices"
     for tag in tag_variants:
@@ -170,7 +155,7 @@ def _find_text(elem, *tag_variants):
 
 
 def _find_elem(parent, tag):
-    """Find a child element trying NS_JP, NS_COM, and no namespace."""
+    """Find a child element trying both API namespaces and plain tag as fallback."""
     NS_COM = "http://www.thalesgroup.com/ojp/common"
     NS_JP  = "http://www.thalesgroup.com/ojp/jpservices"
     for ns in [NS_JP, NS_COM, ""]:
@@ -292,7 +277,7 @@ def parse_cheapest_fare(xml_text, origin_crs, destination_crs, date,
 
 def _single_leg_search(origin_crs, destination_crs, travel_date,
                         use_first_train=False, booking_url=None):
-    """Make one SOAP call and return parse_cheapest_fare result."""
+    """Make one SOAP API call for a single leg and return the cheapest fare found."""
     soap_body = build_soap_request(
         origin_crs=origin_crs,
         destination_crs=destination_crs,

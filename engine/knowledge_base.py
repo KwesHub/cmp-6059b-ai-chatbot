@@ -1,29 +1,26 @@
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
 import json
 import os
 import sys
 
-# Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
 from database import get_connection
 
 
 class KnowledgeBase:
     def __init__(self):
-        """Initilise KB with seed data."""
-        self.qa_database: Dict[str, List[Dict[str, str]]] = {}
-        self.rules: Dict[str, Dict] = {}
-        self.fallback_responses: List[str] = []
+        # in-memory store: {category: [{"question":..., "keywords":..., "answer":...}]}
+        self.qa_database = {}
+        self.rules = {}
+        self.fallback_responses = []
         self.last_updated = datetime.now()
 
-        # Load initial KB from DB
+        # load Q&A pairs, business rules and fallback responses from SQLite on startup
         self._init_qa_database()
         self._init_rules()
         self._init_fallback_responses()
 
-    ################ Q&A DATABASE INTILISATION
+    # Q&A initialisation
 
     def _init_qa_database(self):
         conn = get_connection()
@@ -32,9 +29,10 @@ class KnowledgeBase:
         rows = cursor.fetchall()
         conn.close()
 
+        # if the table is empty on first run, seed it with the defaults and reload
         if not rows:
             self._seed_qa_into_db()
-            self._init_qa_database()  # load again
+            self._init_qa_database()
             return
 
         for category, question, keywords_json, answer in rows:
@@ -48,16 +46,21 @@ class KnowledgeBase:
             })
 
     def _seed_qa_into_db(self):
+        # writes the hard-coded default Q&As into the SQLite table once
         seed = self._get_seed_qa()
         conn = get_connection()
         cursor = conn.cursor()
         for category, qa_list in seed.items():
             for qa in qa_list:
-                cursor.execute("INSERT INTO kb_qa (category, question, keywords, answer) VALUES (?, ?, ?, ?)", (category, qa["question"], json.dumps(qa["keywords"]), qa["answer"]))
+                cursor.execute(
+                    "INSERT INTO kb_qa (category, question, keywords, answer) VALUES (?, ?, ?, ?)",
+                    (category, qa["question"], json.dumps(qa["keywords"]), qa["answer"])
+                )
         conn.commit()
         conn.close()
 
     def _get_seed_qa(self):
+        # default Q&A pairs that are loaded when the database is first created
         return {
             "ticket_types": [
                 {
@@ -124,8 +127,8 @@ class KnowledgeBase:
                     "keywords": ["change ticket", "modify booking", "alter ticket"],
                     "answer": (
                         "Changes are subject to your ticket type:\n"
-                        "- Single/Return - often changeable with a fee (£10-20)\n"
-                        "- Advance - limited changes, £20-30 fee, subject to availability\n"
+                        "- Single/Return - often changeable with a fee\n"
+                        "- Advance - limited changes, subject to availability\n"
                         "- Off-peak - may be changeable depending on specific restrictions\n\n"
                         "Check your ticket terms or contact us for details."
                     ),
@@ -146,9 +149,9 @@ class KnowledgeBase:
                     "keywords": ["cancel ticket", "cancellation", "refund ticket"],
                     "answer": (
                         "Cancellation depends on ticket type:\n"
-                        "- Advance - Non-refundable, exchange only for £10-30 fee\n"
-                        "- Off-peak - Non-refundable, exchange for £15 fee\n"
-                        "- Single/Return - Often refundable up to departure minus £5 fee\n\n"
+                        "- Advance - Non-refundable, exchange only\n"
+                        "- Off-peak - Non-refundable, exchange for a fee\n"
+                        "- Single/Return - Often refundable up to departure minus a small fee\n\n"
                         "Check your ticket terms. Services disrupted due to delay may offer refunds."
                     ),
                 },
@@ -275,6 +278,8 @@ class KnowledgeBase:
             ],
         }
 
+    # rules initialisation
+
     def _init_rules(self):
         conn = get_connection()
         cursor = conn.cursor()
@@ -295,45 +300,37 @@ class KnowledgeBase:
         conn = get_connection()
         cursor = conn.cursor()
         for rule_name, rule_data in seed.items():
-            cursor.execute("INSERT INTO kb_rules (rule_name, rule_data) VALUES (?, ?)", (rule_name, json.dumps(rule_data)))
+            cursor.execute(
+                "INSERT INTO kb_rules (rule_name, rule_data) VALUES (?, ?)",
+                (rule_name, json.dumps(rule_data))
+            )
         conn.commit()
         conn.close()
 
     def _get_seed_rules(self):
+        # business rules covering refund eligibility, delay thresholds and exceptions
         return {
             "refund_eligibility": {
                 "advance_ticket": {
                     "refundable": False,
                     "exchange": True,
-                    "exchange_fee": "£10-30",
                     "description": "Advance tickets are non-refundable but can be exchanged for a fee.",
                 },
                 "off_peak_ticket": {
                     "refundable": False,
                     "exchange": True,
-                    "exchange_fee": "£15",
                     "description": "Off-peak tickets are non-refundable but can be exchanged.",
                 },
                 "single_return_ticket": {
                     "refundable": True,
                     "exchange": True,
-                    "exchange_fee": "£5",
                     "description": "Single/Return tickets are refundable up to departure.",
                 },
             },
             "delay_compensation_thresholds": {
-                "15_29_mins": {
-                    "percentage": 25,
-                    "description": "15-29 minute delay",
-                },
-                "30_59_mins": {
-                    "percentage": 50,
-                    "description": "30-59 minute delay",
-                },
-                "60_plus_mins": {
-                    "percentage": 100,
-                    "description": "60+ minute delay",
-                },
+                "15_29_mins": {"percentage": 25, "description": "15-29 minute delay"},
+                "30_59_mins": {"percentage": 50, "description": "30-59 minute delay"},
+                "60_plus_mins": {"percentage": 100, "description": "60+ minute delay"},
             },
             "delay_exceptions": [
                 "extreme weather",
@@ -342,10 +339,12 @@ class KnowledgeBase:
                 "industrial action",
                 "vandalism",
             ],
-            "booking_window_days": 84,  # 12 weeks
+            "booking_window_days": 84,
             "delay_claim_deadline_days": 28,
             "refund_processing_days": "10-14 business days",
         }
+
+    # fallback initialisation
 
     def _init_fallback_responses(self):
         conn = get_connection()
@@ -374,10 +373,10 @@ class KnowledgeBase:
         return [
             (
                 "I'm not sure I understand that. I can help with:\n"
-                "• Finding cheap train tickets (single, return, advance, off-peak)\n"
-                "• Booking policies and cancellations\n"
-                "• Delay compensation\n"
-                "• Our service information and contact details\n\n"
+                "- Finding cheap train tickets (single, return, advance, off-peak)\n"
+                "- Booking policies and cancellations\n"
+                "- Delay compensation\n"
+                "- Our service information and contact details\n\n"
                 "What would you like to know?"
             ),
             (
@@ -393,33 +392,26 @@ class KnowledgeBase:
             ),
         ]
 
-    ############## KNOWLEDGE RETRIEVAL
+    # retrieval
 
-    def search_qa(self, query: str, threshold: float = 0.6) -> Optional[Dict]:
-        """
-        Search Q&A database using keyword matching.
-
-        Args:
-            query: User's question
-            threshold: Minimum match score (0-1)
-
-        Returns:
-            Matching Q&A entry or None
-        """
+    def search_qa(self, query, threshold=0.6):
+        """Search stored Q&A pairs by keyword match, then by word overlap as fallback."""
         query_lower = query.lower()
         best_match = None
         best_score = 0
 
         for category, qa_pairs in self.qa_database.items():
             for qa in qa_pairs:
-                # Check keywords
                 score = 0
+
+                # keyword match: if any stored keyword appears in the query, high confidence
                 for keyword in qa.get("keywords", []):
                     if keyword.lower() in query_lower:
-                        score = max(score, 0.9)  # High score for keyword match
+                        score = max(score, 0.9)
                         break
 
-                # Fallback: check question similarity
+                # word overlap fallback: count how many question words appear in the query
+                # and normalise by question length to get a 0-1 score
                 if score == 0:
                     question_words = set(qa["question"].lower().split())
                     query_words = set(query_lower.split())
@@ -433,250 +425,51 @@ class KnowledgeBase:
 
         return best_match
 
-    def get_rule(self, rule_name: str, rule_key: Optional[str] = None):
-        """
-        Retrieve a business rule.
-
-        Args:
-            rule_name: Name of the rule (e.g. 'refund_eligibility')
-            rule_key: Specific key within the rule (e.g. 'advance_ticket')
-
-        Returns:
-            Rule data or None
-        """
+    def get_rule(self, rule_name, rule_key=None):
+        """Look up a business rule by name, optionally drilling into a sub-key."""
         rule = self.rules.get(rule_name)
         if rule_key and isinstance(rule, dict):
             return rule.get(rule_key)
         return rule
 
-    def get_fallback_response(self, index: int = 0) -> str:
-        """Get a fallback response for unrecognised queries."""
+    def get_fallback_response(self, index=0):
+        """Return a fallback response when the KB can't answer a query."""
         if 0 <= index < len(self.fallback_responses):
             return self.fallback_responses[index]
         return self.fallback_responses[0]
 
-    ####### KNOWLEDGE ACQUISITION (Dynamic Updates)
+    # knowledge acquisition - called when the user says "add a rule"
 
-    def add_qa(self, category: str, question: str, keywords: List[str], answer: str) -> bool:
-        """
-        Add a new Q&A pair to the KB.
-
-        Args:
-            category: Category name (e.g., 'ticket_types')
-            question: The question
-            keywords: List of keywords for matching
-            answer: The answer
-
-        Returns:
-            True if successful
-        """
+    def add_qa(self, category, question, keywords, answer):
+        """Add a new Q&A pair to the in-memory store and persist it to the DB."""
         if category not in self.qa_database:
             self.qa_database[category] = []
 
-        self.qa_database[category].append(
-            {
-                "question": question,
-                "keywords": keywords,
-                "answer": answer,
-            }
-        )
-        # Insert into DB
+        self.qa_database[category].append({
+            "question": question,
+            "keywords": keywords,
+            "answer": answer,
+        })
+
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO kb_qa (category, question, keywords, answer) VALUES (?, ?, ?, ?)", (category, question, json.dumps(keywords), answer))
+        cursor.execute(
+            "INSERT INTO kb_qa (category, question, keywords, answer) VALUES (?, ?, ?, ?)",
+            (category, question, json.dumps(keywords), answer)
+        )
         conn.commit()
         conn.close()
         self.last_updated = datetime.now()
         return True
 
-    def update_qa(self, category: str, question: str, new_answer: str) -> bool:
-        """
-        Update an existing Q&A pair.
 
-        Args:
-            category: Category name
-            question: The question to find
-            new_answer: Updated answer
-
-        Returns:
-            True if successful
-        """
-        if category not in self.qa_database:
-            return False
-
-        for qa in self.qa_database[category]:
-            if qa["question"].lower() == question.lower():
-                qa["answer"] = new_answer
-                # Update DB
-                conn = get_connection()
-                cursor = conn.cursor()
-                cursor.execute("UPDATE kb_qa SET answer = ? WHERE category = ? AND question = ?", (new_answer, category, question))
-                conn.commit()
-                conn.close()
-                self.last_updated = datetime.now()
-                return True
-
-        return False
-
-    def add_rule(self, rule_name: str, rule_data: Dict) -> bool:
-        """
-        Add or update a business rule.
-
-        Args:
-            rule_name: Name of the rule
-            rule_data: Rule data dictionary
-
-        Returns:
-            True if successful
-        """
-        self.rules[rule_name] = rule_data
-        self.last_updated = datetime.now()
-        return True
-
-    def delete_qa(self, category: str, question: str) -> bool:
-        """
-        Delete a Q&A pair from the KB.
-
-        Args:
-            category: Category name
-            question: The question to remove
-
-        Returns:
-            True if successful
-        """
-        if category not in self.qa_database:
-            return False
-
-        original_len = len(self.qa_database[category])
-        self.qa_database[category] = [
-            qa for qa in self.qa_database[category]
-            if qa["question"].lower() != question.lower()
-        ]
-
-        if len(self.qa_database[category]) < original_len:
-            # Delete from DB
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM kb_qa WHERE category = ? AND question = ?", (category, question))
-            conn.commit()
-            conn.close()
-            self.last_updated = datetime.now()
-            return True
-
-        return False
-
-    ####### PERSISTENCE (Save/Load)
-
-    def save_to_file(self, filepath: str) -> bool:
-        """Save KB to JSON file."""
-        try:
-            data = {
-                "qa_database": self.qa_database,
-                "rules": self.rules,
-                "last_updated": self.last_updated.isoformat(),
-            }
-            with open(filepath, "w") as f:
-                json.dump(data, f, indent=2)
-            return True
-        except Exception as e:
-            print(f"Error saving KB: {e}")
-            return False
-
-    def load_from_file(self, filepath: str) -> bool:
-        """Load KB from JSON file."""
-        try:
-            if not os.path.exists(filepath):
-                return False
-            with open(filepath, "r") as f:
-                data = json.load(f)
-            self.qa_database = data.get("qa_database", {})
-            self.rules = data.get("rules", {})
-            return True
-        except Exception as e:
-            print(f"Error loading KB: {e}")
-            return False
-
-    ####### HELPERS
-
-    def get_all_categories(self) -> List[str]:
-        """Get all Q&A categories."""
-        return list(self.qa_database.keys())
-
-    def get_category_qa_count(self, category: str) -> int:
-        """Get number of Q&A pairs in a category."""
-        return len(self.qa_database.get(category, []))
-
-    def get_kb_summary(self) -> Dict:
-        """Get KB statistics."""
-        total_qa = sum(len(qa_list) for qa_list in self.qa_database.values())
-        return {
-            "total_qa_pairs": total_qa,
-            "categories": len(self.qa_database),
-            "rules": len(self.rules),
-            "last_updated": self.last_updated.isoformat(),
-            "category_breakdown": {
-                cat: len(qa_list)
-                for cat, qa_list in self.qa_database.items()
-            },
-        }
-
-################# GLOBAL INSTANCE
-
-_kb_instance: Optional[KnowledgeBase] = None
+# single shared instance so the DB is only queried once per run
+_kb_instance = None
 
 
-def get_kb() -> KnowledgeBase:
-    """Get or create the global KB instance (singleton pattern)."""
+def get_kb():
+    """Return the shared KnowledgeBase instance, creating it on first call."""
     global _kb_instance
     if _kb_instance is None:
         _kb_instance = KnowledgeBase()
     return _kb_instance
-
-
-########## MANUAL TEST
-
-if __name__ == "__main__":
-    kb = get_kb()
-
-    print("KNOWLEDGE BASE TEST\n")
-
-    print("Test 1: KB Summary")
-    print(json.dumps(kb.get_kb_summary(), indent=2))
-
-    print("\nTest 2: Search Q&A: 'What is a single ticket?'")
-    match = kb.search_qa("What is a single ticket?")
-    if match:
-        print(f"Q: {match['question']}")
-        print(f"A: {match['answer']}\n")
-
-    print("Test 3: Search Q&A: 'delay compensation'")
-    match = kb.search_qa("How do I claim delay compensation?")
-    if match:
-        print(f"Q: {match['question']}")
-        print(f"A: {match['answer']}\n")
-
-    print("Test 4: Get Business Rule: Delay compensation thresholds")
-    rule = kb.get_rule("delay_compensation_thresholds")
-    print(json.dumps(rule, indent=2))
-
-    print("\nTest 5: Get Fallback Response")
-    print(kb.get_fallback_response(0))
-
-    print("\nTest 6: Add New Q&A")
-    success = kb.add_qa(
-        category="ticket_types",
-        question="What is a group ticket?",
-        keywords=["group ticket", "group fare", "group booking"],
-        answer="Group tickets are available for groups of 10+ passengers, "
-               "offering discounts of 20-30% off standard fares.",
-    )
-    print(f"Added: {success}")
-
-    print("\nTest 7: Updated KB Summary")
-    print(json.dumps(kb.get_kb_summary(), indent=2))
-
-    print("\nTest 8: Search for newly added Q&A: 'group tickets'")
-    match = kb.search_qa("group tickets")
-    if match:
-        print(f"Q: {match['question']}")
-        print(f"A: {match['answer']}\n")

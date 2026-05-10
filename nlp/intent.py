@@ -1,21 +1,16 @@
 import spacy
 from config import SPACY_MODEL, INTENT_BOOK_TICKET, INTENT_PREDICT_DELAY, INTENT_ADD_RULE, INTENT_UNKNOWN
 
-# ─── Load spaCy model ────────────────────────────────────
+# load the pre-trained English spaCy model once at import time
 nlp = spacy.load(SPACY_MODEL)
 
 
 def get_intent(user_input: str) -> str:
-    """
-    Analyse the user's message and return one of the intents:
-    - INTENT_BOOK_TICKET    → user wants to find/book a train ticket
-    - INTENT_PREDICT_DELAY  → user wants to predict a delay
-    - INTENT_ADD_RULE       → user wants to teach the bot a new rule
-    - INTENT_UNKNOWN        → couldn't work it out
-    """
+    """Work out what the user wants: book a ticket, predict a delay, add a rule, or unknown."""
     doc = nlp(user_input.lower())
 
-    # ─── Extract root verb + direct object pairs ─────────
+    # spaCy gives each word a dependency label; ROOT is the main verb,
+    # dobj is the direct object -- e.g. in "find me a ticket", root=find, dobj=ticket
     root = None
     dobj = None
 
@@ -25,11 +20,13 @@ def get_intent(user_input: str) -> str:
         if token.dep_ == "dobj":
             dobj = token.lemma_
 
-    # ─── Keyword matching for add_rule intent ────────────
+    # collect all lemmas so we can do simple keyword lookups below
+    all_words = {token.lemma_ for token in doc}
+
+    # check for "add a rule / teach me something" intent first,
+    # because some words (e.g. "learn") overlap with booking phrases
     ka_verbs = {"add", "teach", "learn", "remember", "save", "store", "create"}
     ka_nouns = {"rule", "fact", "knowledge", "answer", "response", "information"}
-
-    all_words = {token.lemma_ for token in doc}
 
     if (root in ka_verbs and all_words & ka_nouns) or \
        ("add" in all_words and "rule" in all_words) or \
@@ -37,22 +34,21 @@ def get_intent(user_input: str) -> str:
        ("remember this" in user_input.lower()):
         return INTENT_ADD_RULE
 
-    # ─── Keyword matching for book_ticket intent ─────────
+    # keyword sets for the two main tasks
     ticket_verbs = {"find", "book", "buy", "get", "search", "check", "want", "need", "look", "help"}
     ticket_nouns = {"ticket", "fare", "price", "cheap", "cost", "journey", "travel", "book"}
 
-    # ─── Keyword matching for predict_delay intent ────────
     delay_verbs = {"predict", "estimate", "check", "calculate", "know", "find"}
     delay_nouns = {"delay", "late", "arrival", "arrive", "time", "delayed", "stuck", "when"}
 
-    # Check root verb and dobj against keyword sets
+    # first try the root verb and direct object -- more accurate than a bag-of-words check
     if root in ticket_verbs or dobj in ticket_nouns:
         return INTENT_BOOK_TICKET
 
     if root in delay_verbs or dobj in delay_nouns:
         return INTENT_PREDICT_DELAY
 
-    # ─── Fallback: scan all tokens for keywords ───────────
+    # fallback: scan all tokens for any matching keyword
     if all_words & ticket_nouns:
         return INTENT_BOOK_TICKET
 
@@ -62,7 +58,6 @@ def get_intent(user_input: str) -> str:
     return INTENT_UNKNOWN
 
 
-# ─── Manual test ─────────────────────────────────────────
 if __name__ == "__main__":
     tests = [
         "I want to find the cheapest ticket from Norwich to London",
@@ -74,4 +69,4 @@ if __name__ == "__main__":
         "asdfghjkl",
     ]
     for t in tests:
-        print(f"'{t}'\n  → {get_intent(t)}\n")
+        print(f"'{t}'\n  -> {get_intent(t)}\n")

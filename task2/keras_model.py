@@ -25,14 +25,27 @@ def load_splits():
 def clip_delays(y_train, y_test, max_delay=120):
     y_train = y_train.clip(-max_delay, max_delay)
     y_test  = y_test.clip(-max_delay, max_delay)
-    print(f"Delays clipped to ±{max_delay} minutes")
+    print(f"Delays clipped to +/-{max_delay} minutes")
     return y_train, y_test
 
 
 def build_mlp(input_dim: int):
     """
-    Multi-Layer Perceptron for delay regression.
-    Architecture: input(6) -> 128 -> 64 -> 32 -> 1
+    Build a Multi-Layer Perceptron (MLP) for delay regression.
+
+    Architecture: input -> Dense(128) -> Dense(64) -> Dense(32) -> output(1)
+
+    ReLU activation introduces non-linearity so the network can learn
+    patterns that Linear Regression cannot (e.g. delays only getting bad
+    past a certain time of day).
+
+    Dropout layers randomly switch off 10% of neurons during each training
+    step. This is a regularisation technique that prevents overfitting --
+    the network can't memorise the training data if different neurons are
+    disabled each time.
+
+    The output layer has no activation because this is a regression task
+    (predicting a continuous value, not a class label).
     """
     from tensorflow import keras
     from tensorflow.keras import layers
@@ -44,40 +57,46 @@ def build_mlp(input_dim: int):
         layers.Dense(64, activation="relu"),
         layers.Dropout(0.1),
         layers.Dense(32, activation="relu"),
-        layers.Dense(1)
+        layers.Dense(1)          # single output: predicted delay in minutes
     ], name="delay_mlp")
 
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=0.001),
-        loss="mse",
-        metrics=["mae"]
+        loss="mse",              # mean squared error penalises large errors heavily
+        metrics=["mae"]          # we also track MAE as it's easier to interpret
     )
     return model
 
 
 def train():
-    # ── Load and clip ─────────────────────────────────────
     X_train, X_test, y_train, y_test = load_splits()
     y_train, y_test = clip_delays(y_train, y_test)
 
-    # ── Scale features ────────────────────────────────────
+    # StandardScaler transforms each feature to have mean=0 and std=1.
+    # Neural networks use gradient descent which is sensitive to feature magnitude --
+    # without scaling, a feature in the thousands (e.g. minutes past midnight)
+    # would dominate the gradient updates and slow down training.
+    # The scaler is fit on training data only, then applied to the test set,
+    # to avoid leaking any test information into training.
     print("Scaling features...")
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_test_s  = scaler.transform(X_test)
 
-    # Save scaler so predict.py can use it at inference time
+    # save the scaler so predict.py can apply the same transformation at inference time
     scaler_path = os.path.join(MODEL_DIR, "keras_scaler.pkl")
     joblib.dump(scaler, scaler_path)
     print(f"Scaler saved to {scaler_path}")
 
-    # ── Build and summarise ───────────────────────────────
     from tensorflow import keras
     model = build_mlp(input_dim=X_train_s.shape[1])
     model.summary()
 
-    # ── Train ─────────────────────────────────────────────
     print("\nTraining Keras MLP...")
+
+    # EarlyStopping monitors validation loss and stops training when it stops
+    # improving, then restores the weights from the best epoch.
+    # This prevents overfitting without having to guess the number of epochs.
     early_stop = keras.callbacks.EarlyStopping(
         monitor="val_loss",
         patience=3,
@@ -86,14 +105,13 @@ def train():
 
     model.fit(
         X_train_s, y_train,
-        validation_split=0.1,
+        validation_split=0.1,   # 10% of training data used to monitor overfitting
         epochs=30,
         batch_size=1024,
         callbacks=[early_stop],
         verbose=1
     )
 
-    # ── Evaluate ──────────────────────────────────────────
     preds = model.predict(X_test_s, verbose=0).flatten()
     rmse  = math.sqrt(mean_squared_error(y_test, preds))
     mae   = mean_absolute_error(y_test, preds)
@@ -104,15 +122,15 @@ def train():
     print("=" * 55)
     print(f"  RMSE : {rmse:.2f} minutes")
     print(f"  MAE  : {mae:.2f} minutes")
-    print(f"  R²   : {r2:.3f}")
+    print(f"  R2   : {r2:.3f}")
     print("=" * 55)
 
-    # ── Save model ────────────────────────────────────────
     model_path = os.path.join(MODEL_DIR, "keras_model.keras")
     model.save(model_path)
     print(f"Model saved to {model_path}")
 
-    # ── Append to model_comparison.csv ───────────────────
+    # append results to model_comparison.csv so we can compare Keras against
+    # the sklearn models trained in train_models.py
     comparison_path = os.path.join(DATA_DIR, "model_comparison.csv")
     if os.path.exists(comparison_path):
         df = pd.read_csv(comparison_path)
